@@ -1,0 +1,41 @@
+{
+  "name": "@cm64/cli",
+  "version": "2.0.0",
+  "description": "CM64 CLI — Stateless command-line tool for CM64 Studio",
+  "type": "module",
+  "bin": {
+    "cm64": "bin/cm64.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "SKILL.md",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node bin/cm64.js help"
+  },
+  "keywords": [
+    "cm64",
+    "cli",
+    "jasonjs",
+    "web-development",
+    "ai-agent",
+    "deployment",
+    "claude",
+    "claude-code"
+  ],
+  "author": "CM64",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cm64-studio/cm64-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cm64-studio/cm64-cli/issues"
+  },
+  "homepage": "https://github.com/cm64-studio/cm64-cli#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
