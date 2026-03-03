@@ -90,35 +90,97 @@ const HANDLERS = {
 
   // ─── login ─────────────────────────────────────────────────
   async login() {
-    let token = subArgs[0];
+    const tokenArg = subArgs[0];
     const endpoint = getFlag(['--endpoint', '-e'], true);
+    const tokenFlag = getFlag(['--token', '-t'], true);
 
-    if (!token) {
-      if (process.stdin.isTTY) {
-        out('CM64 CLI Login');
-        out('Generate a token at: https://build.cm64.io/settings/tokens\n');
-        token = await prompt('Token: ');
-      } else {
-        token = (await readStdin())?.trim();
+    // If a raw token is provided directly (cm64 login cm64_pat_... or --token)
+    if (tokenArg?.startsWith('cm64_pat_') || tokenFlag) {
+      const token = tokenFlag || tokenArg;
+      const updates = { token };
+      if (endpoint) updates.endpoint = endpoint;
+      saveConfig(updates);
+      info(`Token saved to ${CONFIG_FILE}`);
+
+      const result = await callCLI('list_projects', { limit: 1 });
+      if (result.ok === false) {
+        die(`Token saved but validation failed: ${result.error}`);
       }
+      out('Logged in successfully.');
+      return;
     }
 
-    if (!token) die('Token required. Run: cm64 login <token>');
-
-    // Validate token
-    const updates = { token };
-    if (endpoint) updates.endpoint = endpoint;
-
-    const config = saveConfig(updates);
-    info(`Token saved to ${CONFIG_FILE}`);
-
-    // Test the token
-    const result = await callCLI('list_projects', { limit: 1 });
-    if (result.ok === false) {
-      die(`Token saved but validation failed: ${result.error}`);
+    // Interactive email + code flow
+    if (!process.stdin.isTTY) {
+      die('Interactive login requires a terminal. Use: cm64 login <token>');
     }
 
-    out('Logged in successfully.');
+    const config = loadConfig();
+    const baseEndpoint = endpoint || config.endpoint || 'https://build.cm64.io/api/cli';
+    // Derive the auth base URL from the CLI endpoint
+    const authBase = baseEndpoint.replace(/\/api\/cli\/?$/, '/api/auth');
+
+    out('CM64 CLI Login\n');
+
+    // Step 1: Get email
+    const email = await prompt('Email: ');
+    if (!email || !email.includes('@')) die('Valid email required.');
+
+    // Step 2: Request verification code
+    info('Sending verification code...');
+    try {
+      const sendRes = await fetch(`${authBase}/send-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+
+      const sendData = await sendRes.json();
+
+      if (!sendRes.ok) {
+        if (sendData.redirectToSignup) {
+          die(`No account found for ${email}. Sign up at https://build.cm64.io first.`);
+        }
+        die(sendData.error || 'Failed to send code.');
+      }
+
+      out('Code sent! Check your email.\n');
+    } catch (e) {
+      die(`Could not reach server: ${e.message}`);
+    }
+
+    // Step 3: Get code
+    const code = await prompt('Code: ');
+    if (!code || code.length < 6) die('Enter the 6-digit code from your email.');
+
+    // Step 4: Verify code and get token
+    info('Verifying...');
+    try {
+      const verifyRes = await fetch(`${authBase}/cli-login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'cm64-cli/2.0.0'
+        },
+        body: JSON.stringify({ email, code: code.trim() })
+      });
+
+      const verifyData = await verifyRes.json();
+
+      if (!verifyRes.ok) {
+        die(verifyData.error || 'Verification failed.');
+      }
+
+      // Save token
+      const updates = { token: verifyData.token };
+      if (endpoint) updates.endpoint = endpoint;
+      saveConfig(updates);
+
+      out(`\nLogged in as ${verifyData.user?.name || verifyData.user?.email || email}`);
+      info(`Token saved to ${CONFIG_FILE}`);
+    } catch (e) {
+      die(`Verification failed: ${e.message}`);
+    }
   },
 
   // ─── projects ──────────────────────────────────────────────
@@ -504,7 +566,8 @@ const HANDLERS = {
     out(`CM64 CLI v2.0.0 — Stateless CLI for CM64 Studio
 
 SETUP
-  cm64 login [token]              Save token to ~/.cm64/config.json
+  cm64 login                      Login with email + verification code
+  cm64 login <token>              Login with an existing PAT token
   cm64 projects [--query x]       List projects
   cm64 use <project_id>           Set active project
   cm64 create <name>              Create new project

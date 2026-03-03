@@ -11,8 +11,11 @@ npm install -g @cm64/cli
 ## Quick Start
 
 ```bash
-# 1. Login with your Personal Access Token
-cm64 login cm64_pat_abc123
+# 1. Login with your email (sends verification code)
+cm64 login
+
+# Or login with an existing PAT token
+# cm64 login cm64_pat_abc123
 
 # 2. List your projects
 cm64 projects

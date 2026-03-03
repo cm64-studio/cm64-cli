@@ -5,7 +5,8 @@ This is the primary reference for AI models (Claude, GPT, etc.) using the `cm64`
 ## Quick Start
 
 ```bash
-cm64 login <token>           # Authenticate (one-time)
+cm64 login                   # Login with email + code (interactive)
+cm64 login <token>           # Or login with an existing PAT token
 cm64 projects                # List available projects
 cm64 use <project_id>        # Set active project (persists across commands)
 cm64 ls                      # List all files
@@ -70,7 +71,7 @@ cm64 read component/Header --json               # Structured JSON output
 ### Setup & Navigation
 | Command | Description |
 |---------|-------------|
-| `cm64 login [token]` | Save token to ~/.cm64/config.json |
+| `cm64 login` | Login with email + verification code (or `cm64 login <token>`) |
 | `cm64 projects [--query x]` | List projects you have access to |
 | `cm64 use <project_id>` | Set active project (persists) |
 | `cm64 create <name>` | Create new project |
