@@ -8,6 +8,10 @@ import { callCLI } from '../lib/api.js';
 import { cacheFile, getCachedFile, getCachedHash } from '../lib/cache.js';
 import { createInterface } from 'readline';
 import { readFileSync, existsSync } from 'fs';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const pkg = require('../package.json');
 
 // ── Argument Parsing ─────────────────────────────────────────
 
@@ -30,7 +34,7 @@ function getFlag(names, hasValue = false) {
 }
 
 const jsonOutput = getFlag(['--json']);
-const forceFlag = getFlag(['--force', '-f']);
+const forceFlag = getFlag(['--force', '-F']);
 const command = argv[0];
 const subArgs = argv.slice(1);
 
@@ -512,10 +516,30 @@ const HANDLERS = {
     }
   },
 
+  // ─── load (system prompt) ─────────────────────────────────
+  async load() {
+    const raw = getFlag(['--raw', '-r']);
+    const result = await callCLI('get_system_prompt', { raw: raw || undefined });
+    outputResult(result);
+  },
+
+  // ─── skills ─────────────────────────────────────────────────
+  async skills() {
+    const skill = subArgs[0] || undefined;
+    const result = await callCLI('skill_info', { skill });
+    outputResult(result);
+  },
+
   // ─── learn ─────────────────────────────────────────────────
   async learn() {
     const skills = subArgs.length > 0 ? subArgs : undefined;
-    const result = await callCLI('learn', { skills });
+    const offset = getFlag(['--offset'], true);
+    const limit = getFlag(['--limit', '-n'], true);
+    const result = await callCLI('learn', {
+      skills,
+      offset: offset ? parseInt(offset) : undefined,
+      limit: limit ? parseInt(limit) : undefined
+    });
     outputResult(result);
   },
 
@@ -563,7 +587,7 @@ const HANDLERS = {
 
   // ─── help ──────────────────────────────────────────────────
   async help() {
-    out(`CM64 CLI v2.0.0 — Stateless CLI for CM64 Studio
+    out(`CM64 CLI v${pkg.version} — Stateless CLI for CM64 Studio
 
 SETUP
   cm64 login                      Login with email + verification code
@@ -593,9 +617,13 @@ DEPLOY
   cm64 history <class/name>       File version history
 
 PROJECT
+  cm64 load                       Get system prompt (interpolated)
+  cm64 load --raw                 Get system prompt (raw, no variables)
+  cm64 skills                     List all skills with sizes
+  cm64 skills <name>              Skill metadata and preview
+  cm64 learn [skill_name]         Read full skill docs
   cm64 buildme                    Read BUILDME.md
   cm64 buildme --set "content"    Update BUILDME.md
-  cm64 learn [skill_name]         Skill docs
 
 DATA
   cm64 users [--search x]         App end-users
@@ -604,8 +632,8 @@ DATA
 
 FLAGS
   --json                          Structured JSON output
-  --force                         Skip conflict detection
-  -f <file>                       Read content from local file
+  --force, -F                     Skip conflict detection
+  -f, --file <path>               Read content from local file
 
 ENVIRONMENT
   CM64_TOKEN                      Override token
@@ -651,6 +679,10 @@ async function main() {
     'publish': 'deploy',
     'log': 'debug',
     'logs': 'debug',
+    'systemprompt': 'load',
+    'prompt': 'load',
+    'sp': 'load',
+    'skill': 'skills',
   };
 
   const cmd = aliases[command] || command;
@@ -668,7 +700,7 @@ async function main() {
   }
 
   // Check project for commands that need it
-  const needsProject = !['login', 'help', 'projects', 'create', 'use', 'learn'].includes(cmd);
+  const needsProject = !['login', 'help', 'projects', 'create', 'use', 'learn', 'skills'].includes(cmd);
   if (needsProject && !getProjectId()) {
     die('No active project. Run: cm64 use <project_id>');
   }
