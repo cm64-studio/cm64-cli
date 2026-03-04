@@ -7,7 +7,8 @@ import { loadConfig, saveConfig, getToken, getEndpoint, getProjectId, CONFIG_FIL
 import { callCLI } from '../lib/api.js';
 import { cacheFile, getCachedFile, getCachedHash } from '../lib/cache.js';
 import { createInterface } from 'readline';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'fs';
+import { join, dirname, basename, extname } from 'path';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
@@ -64,6 +65,131 @@ function outputResult(result) {
     die(result.error);
   } else {
     out(result.text || '');
+  }
+}
+
+// ── Path Validation ─────────────────────────────────────────
+
+const VALID_CLASSES = ['page', 'component', 'function', 'css', 'setting', 'database', 'asset'];
+
+function validatePath(path) {
+  if (!path || !path.includes('/')) return; // let server handle missing/malformed paths
+  const cls = path.split('/')[0];
+  if (VALID_CLASSES.includes(cls)) return;
+  // Check for common mistakes (plurals, typos)
+  const singular = cls.replace(/s$/, '');
+  if (VALID_CLASSES.includes(singular)) {
+    die(`Invalid class "${cls}". Did you mean "${singular}"?\n  Valid classes: ${VALID_CLASSES.join(', ')}`);
+  }
+  die(`Invalid class "${cls}".\n  Valid classes: ${VALID_CLASSES.join(', ')}`);
+}
+
+// ── Path Mapping (local ↔ server) ───────────────────────────
+
+// Map folder name (plural or singular) → file class
+const FOLDER_TO_CLASS = {
+  'pages': 'page', 'page': 'page',
+  'components': 'component', 'component': 'component',
+  'functions': 'function', 'function': 'function',
+  'css': 'css',
+  'settings': 'setting', 'setting': 'setting',
+  'databases': 'database', 'database': 'database',
+  'assets': 'asset', 'asset': 'asset',
+};
+
+// Map file class → default extension
+const CLASS_EXT = {
+  page: '.json', component: '.jsx', function: '.js',
+  css: '.css', setting: '.json', database: '.json', asset: '',
+};
+
+// Map extension → likely class (when ambiguous, prefer component)
+const EXT_TO_CLASS = {
+  '.jsx': 'component', '.tsx': 'component',
+  '.css': 'css', '.scss': 'css',
+  '.json': 'setting',
+};
+
+/**
+ * Parse a local file path into { class, name, ext }.
+ * e.g. "components/Hero.jsx" → { class: "component", name: "Hero", ext: ".jsx" }
+ *      "settings/theme.json" → { class: "setting", name: "theme", ext: ".json" }
+ *      "component/Nav"       → { class: "component", name: "Nav", ext: "" }  (server-style path)
+ */
+function parseLocalPath(localPath) {
+  // Normalize separators and strip leading ./
+  const normalized = localPath.replace(/\\/g, '/').replace(/^\.\//, '');
+  const parts = normalized.split('/').filter(Boolean);
+
+  if (parts.length < 2) return null; // Need at least folder/file
+
+  const folder = parts[0];
+  const cls = FOLDER_TO_CLASS[folder];
+  if (!cls) return null;
+
+  // Remaining parts form the name (support nested like components/ui/Button.jsx)
+  const rest = parts.slice(1).join('/');
+  const ext = extname(rest);
+  const name = ext ? rest.slice(0, -ext.length) : rest;
+
+  return { class: cls, name, ext };
+}
+
+/**
+ * Convert server path (class/name) to local file path.
+ * e.g. { class: "component", name: "Hero" } → "components/Hero.jsx"
+ */
+function toLocalPath(cls, name, baseDir = '.') {
+  // Use plural folder names for local filesystem
+  const folderMap = {
+    page: 'pages', component: 'components', function: 'functions',
+    css: 'css', setting: 'settings', database: 'databases', asset: 'assets',
+  };
+  const folder = folderMap[cls] || cls;
+  const ext = CLASS_EXT[cls] || '';
+  // Only add ext if name doesn't already have one
+  const fileName = extname(name) ? name : name + ext;
+  return join(baseDir, folder, fileName);
+}
+
+/**
+ * Scan a local directory for pushable files.
+ * Returns array of { localFile, class, name }
+ */
+function scanLocalFiles(dir) {
+  const results = [];
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) return results;
+
+  const entries = readdirSync(dir);
+  for (const entry of entries) {
+    const fullPath = join(dir, entry);
+    const stat = statSync(fullPath);
+    if (stat.isDirectory()) {
+      // Check if this is a class folder
+      const cls = FOLDER_TO_CLASS[entry];
+      if (cls) {
+        // Scan files inside
+        scanDir(fullPath, cls, '', results);
+      }
+    }
+  }
+  return results;
+}
+
+function scanDir(dir, cls, prefix, results) {
+  const entries = readdirSync(dir);
+  for (const entry of entries) {
+    const fullPath = join(dir, entry);
+    const stat = statSync(fullPath);
+    if (stat.isDirectory()) {
+      scanDir(fullPath, cls, prefix ? `${prefix}/${entry}` : entry, results);
+    } else {
+      const ext = extname(entry);
+      const name = prefix
+        ? `${prefix}/${ext ? entry.slice(0, -ext.length) : entry}`
+        : (ext ? entry.slice(0, -ext.length) : entry);
+      results.push({ localFile: fullPath, class: cls, name });
+    }
   }
 }
 
@@ -240,6 +366,7 @@ const HANDLERS = {
   async read() {
     const path = subArgs[0];
     if (!path) die('Usage: cm64 read <class/name>');
+    validatePath(path);
 
     const result = await callCLI('read_file', { path });
     if (result.ok && result.data) {
@@ -260,10 +387,12 @@ const HANDLERS = {
   async write() {
     const path = subArgs[0];
     if (!path) die('Usage: cm64 write <class/name> --content "..." | -f file.json | stdin');
+    validatePath(path);
 
     let content = getFlag(['--content', '-c'], true);
     const localFile = getFlag(['-f', '--file'], true);
     const changelog = getFlag(['--changelog', '--msg', '-m'], true);
+    const showDiff = getFlag(['--diff', '--preview']);
     let baseHash = getFlag(['--hash'], true);
 
     // Read from local file
@@ -279,6 +408,27 @@ const HANDLERS = {
 
     if (!content) die('No content provided. Use --content, -f, or pipe stdin.');
 
+    // --diff: show changes vs cached version before writing
+    if (showDiff) {
+      const projectId = getProjectId();
+      const cached = projectId ? getCachedFile(projectId, path) : null;
+      if (cached?.content) {
+        const diff = simpleDiff(cached.content, content);
+        if (diff) {
+          info(`Changes to ${path}:\n${diff}`);
+          const answer = await prompt('Write this file? (y/n) ');
+          if (answer.toLowerCase() !== 'y') {
+            die('Aborted.', 0);
+          }
+        } else {
+          info('No changes detected.');
+          return;
+        }
+      } else {
+        info(`New file: ${path} (no cached version to diff)`);
+      }
+    }
+
     // Auto-use cached hash for conflict detection
     if (!baseHash && !forceFlag) {
       const projectId = getProjectId();
@@ -291,6 +441,7 @@ const HANDLERS = {
     if (baseHash) args.base_hash = baseHash;
     if (forceFlag) args.force = true;
 
+    info(`Writing ${path}...`);
     const result = await callCLI('write_file', args);
 
     // Update cache with new hash
@@ -337,10 +488,362 @@ const HANDLERS = {
     outputResult(result);
   },
 
+  // ─── push ──────────────────────────────────────────────────
+  async push() {
+    const target = subArgs[0];
+    if (!target) die('Usage: cm64 push <local-path>\n  cm64 push components/Hero.jsx\n  cm64 push ./components/\n  cm64 push ./');
+
+    const stat = existsSync(target) ? statSync(target) : null;
+
+    // Push a directory (push all files inside)
+    if (stat?.isDirectory()) {
+      // Check if it's a class folder directly (e.g., ./components/) or a root dir (e.g., ./)
+      const dirName = basename(target.replace(/\/+$/, ''));
+      const cls = FOLDER_TO_CLASS[dirName];
+
+      let files;
+      if (cls) {
+        // It's a class folder — scan files inside it
+        const items = [];
+        scanDir(target, cls, '', items);
+        files = items;
+      } else {
+        // It's a root-like dir — scan for class subfolders
+        files = scanLocalFiles(target);
+      }
+
+      if (files.length === 0) die(`No pushable files found in ${target}\n  Expected folders: components/, pages/, functions/, css/, settings/, databases/`);
+
+      info(`Pushing ${files.length} file(s)...`);
+
+      const payload = [];
+      for (const f of files) {
+        const content = readFileSync(f.localFile, 'utf-8');
+        const serverPath = `${f.class}/${f.name}`;
+        const entry = { path: serverPath, content };
+
+        // Auto-attach cached hash
+        const projectId = getProjectId();
+        if (projectId && !forceFlag) {
+          const cached = getCachedHash(projectId, serverPath);
+          if (cached) entry.base_hash = cached;
+        }
+        if (forceFlag) entry.force = true;
+
+        payload.push(entry);
+      }
+
+      const result = await callCLI('write_files', { files: payload });
+
+      // Update cache for written files
+      if (result.ok && result.data?.results) {
+        const projectId = getProjectId();
+        if (projectId) {
+          for (const r of result.data.results) {
+            if (r.ok && r.hash && r.path) {
+              const f = payload.find(p => p.path === r.path);
+              if (f) {
+                cacheFile(projectId, r.path, {
+                  hash: r.hash,
+                  content: f.content,
+                  updatedAt: new Date().toISOString()
+                });
+              }
+            }
+          }
+        }
+      }
+
+      outputResult(result);
+      return;
+    }
+
+    // Push a single file
+    if (!stat) die(`Not found: ${target}`);
+
+    const parsed = parseLocalPath(target);
+    if (!parsed) die(`Can't detect file class from path: ${target}\n  Expected format: <class-folder>/<name>.<ext>  (e.g., components/Hero.jsx, settings/theme.json)`);
+
+    const serverPath = `${parsed.class}/${parsed.name}`;
+    const content = readFileSync(target, 'utf-8');
+
+    let baseHash = null;
+    const projectId = getProjectId();
+    if (projectId && !forceFlag) {
+      baseHash = getCachedHash(projectId, serverPath);
+    }
+
+    const args = { path: serverPath, content };
+    if (baseHash) args.base_hash = baseHash;
+    if (forceFlag) args.force = true;
+
+    info(`Pushing ${serverPath}...`);
+    const result = await callCLI('write_file', args);
+
+    if (result.ok && result.data?.hash && projectId) {
+      cacheFile(projectId, serverPath, {
+        hash: result.data.hash,
+        content,
+        updatedAt: new Date().toISOString()
+      });
+    }
+
+    outputResult(result);
+  },
+
+  // ─── pull ──────────────────────────────────────────────────
+  async pull() {
+    const target = subArgs[0];
+    if (!target) die('Usage: cm64 pull <class/name|local-path|./>\n  cm64 pull component/Hero\n  cm64 pull ./components/\n  cm64 pull ./');
+
+    const outDir = getFlag(['-o', '--out'], true) || '.';
+
+    // Pull all files (cm64 pull ./ or cm64 pull .)
+    if (target === './' || target === '.') {
+      info('Pulling all files...');
+      const result = await callCLI('list_files', {});
+      if (!result.ok) { outputResult(result); return; }
+
+      const files = result.data?.files || [];
+      if (files.length === 0) { info('No files found.'); return; }
+
+      let count = 0;
+      for (const f of files) {
+        const cls = f.class;
+        const name = f.name;
+        if (!cls || !name) continue;
+        // Skip assets (binary, not text)
+        if (cls === 'asset') continue;
+
+        const serverPath = `${cls}/${name}`;
+        const readResult = await callCLI('read_file', { path: serverPath });
+        if (!readResult.ok || !readResult.data) continue;
+
+        const localFile = toLocalPath(cls, name, outDir);
+        const dir = dirname(localFile);
+        if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+        writeFileSync(localFile, readResult.data.content || '');
+
+        // Cache the hash
+        const projectId = getProjectId();
+        if (projectId && readResult.data.hash) {
+          cacheFile(projectId, serverPath, {
+            hash: readResult.data.hash,
+            content: readResult.data.content,
+            updatedAt: readResult.data.updatedAt || new Date().toISOString()
+          });
+        }
+        count++;
+        info(`  ${serverPath} → ${localFile}`);
+      }
+      out(`Pulled ${count} file(s)`);
+      return;
+    }
+
+    // Pull by class folder (cm64 pull ./components/ or cm64 pull components/)
+    const dirName = basename(target.replace(/\/+$/, ''));
+    const folderClass = FOLDER_TO_CLASS[dirName];
+    if (folderClass && (target.endsWith('/') || !target.includes('.'))) {
+      info(`Pulling all ${folderClass} files...`);
+      const result = await callCLI('list_files', { class: folderClass });
+      if (!result.ok) { outputResult(result); return; }
+
+      const files = result.data?.files || [];
+      let count = 0;
+      for (const f of files) {
+        const serverPath = `${folderClass}/${f.name}`;
+        const readResult = await callCLI('read_file', { path: serverPath });
+        if (!readResult.ok || !readResult.data) continue;
+
+        const localFile = toLocalPath(folderClass, f.name, outDir);
+        const dir = dirname(localFile);
+        if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+        writeFileSync(localFile, readResult.data.content || '');
+
+        const projectId = getProjectId();
+        if (projectId && readResult.data.hash) {
+          cacheFile(projectId, serverPath, {
+            hash: readResult.data.hash,
+            content: readResult.data.content,
+            updatedAt: readResult.data.updatedAt || new Date().toISOString()
+          });
+        }
+        count++;
+        info(`  ${serverPath} → ${localFile}`);
+      }
+      out(`Pulled ${count} ${folderClass} file(s)`);
+      return;
+    }
+
+    // Pull a single file: accept either "component/Hero" or "components/Hero.jsx"
+    let serverPath;
+    const parsed = parseLocalPath(target);
+    if (parsed) {
+      serverPath = `${parsed.class}/${parsed.name}`;
+    } else if (target.includes('/')) {
+      validatePath(target);
+      serverPath = target;
+    } else {
+      die(`Can't parse path: ${target}\n  Use class/name (e.g., component/Hero) or local path (e.g., components/Hero.jsx)`);
+    }
+
+    info(`Pulling ${serverPath}...`);
+    const readResult = await callCLI('read_file', { path: serverPath });
+    if (!readResult.ok) { outputResult(readResult); return; }
+
+    const [cls, ...nameParts] = serverPath.split('/');
+    const name = nameParts.join('/');
+    const localFile = toLocalPath(cls, name, outDir);
+    const dir = dirname(localFile);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(localFile, readResult.data.content || '');
+
+    const projectId = getProjectId();
+    if (projectId && readResult.data.hash) {
+      cacheFile(projectId, serverPath, {
+        hash: readResult.data.hash,
+        content: readResult.data.content,
+        updatedAt: readResult.data.updatedAt || new Date().toISOString()
+      });
+    }
+
+    out(`Pulled ${serverPath} → ${localFile}`);
+  },
+
+  // ─── sync ─────────────────────────────────────────────────
+  async sync() {
+    const target = subArgs[0] || './';
+    const projectId = getProjectId();
+    if (!projectId) die('No active project. Run: cm64 use <project_id>');
+
+    // Determine which classes to sync
+    const dirName = basename(target.replace(/\/+$/, ''));
+    const singleClass = FOLDER_TO_CLASS[dirName];
+    const classFilter = singleClass ? [singleClass] : VALID_CLASSES.filter(c => c !== 'asset');
+    const baseDir = singleClass ? dirname(target.replace(/\/+$/, '')) || '.' : target.replace(/\/+$/, '') || '.';
+
+    info('Syncing...');
+
+    // 1. Get all remote files
+    const remoteResult = await callCLI('list_files', {});
+    if (!remoteResult.ok) { outputResult(remoteResult); return; }
+    const remoteFiles = (remoteResult.data?.files || []).filter(f => classFilter.includes(f.class));
+
+    // 2. Scan local files
+    const localFiles = singleClass
+      ? (() => { const items = []; scanDir(target, singleClass, '', items); return items; })()
+      : scanLocalFiles(baseDir);
+
+    // Build lookup maps
+    const remoteMap = new Map();
+    for (const f of remoteFiles) remoteMap.set(`${f.class}/${f.name}`, f);
+    const localMap = new Map();
+    for (const f of localFiles) localMap.set(`${f.class}/${f.name}`, f);
+
+    const toPush = [];
+    const toPull = [];
+
+    // 3. Check local files against remote
+    for (const [serverPath, local] of localMap) {
+      const localContent = readFileSync(local.localFile, 'utf-8');
+      const cached = getCachedFile(projectId, serverPath);
+
+      if (!remoteMap.has(serverPath)) {
+        // Exists locally but not remote → push (new file)
+        toPush.push({ serverPath, content: localContent, localFile: local.localFile });
+      } else if (cached) {
+        // Both exist — compare hashes
+        const localChanged = localContent !== cached.content;
+        if (localChanged) {
+          toPush.push({ serverPath, content: localContent, localFile: local.localFile, base_hash: cached.hash });
+        }
+      }
+    }
+
+    // 4. Check remote files not local → pull
+    for (const [serverPath, remote] of remoteMap) {
+      if (!localMap.has(serverPath)) {
+        toPull.push({ serverPath, class: remote.class, name: remote.name });
+      } else {
+        // Both exist — check if remote changed since our cache
+        const cached = getCachedFile(projectId, serverPath);
+        if (cached && remote.hash && remote.hash !== cached.hash && !toPush.find(p => p.serverPath === serverPath)) {
+          toPull.push({ serverPath, class: remote.class, name: remote.name });
+        }
+      }
+    }
+
+    if (toPush.length === 0 && toPull.length === 0) {
+      out('Everything up to date.');
+      return;
+    }
+
+    // Show summary
+    if (toPush.length > 0) info(`  ↑ Push: ${toPush.map(f => f.serverPath).join(', ')}`);
+    if (toPull.length > 0) info(`  ↓ Pull: ${toPull.map(f => f.serverPath).join(', ')}`);
+
+    // 5. Execute pushes
+    if (toPush.length > 0) {
+      const payload = toPush.map(f => {
+        const entry = { path: f.serverPath, content: f.content };
+        if (f.base_hash) entry.base_hash = f.base_hash;
+        if (forceFlag) entry.force = true;
+        return entry;
+      });
+
+      const pushResult = await callCLI('write_files', { files: payload });
+      if (pushResult.ok && pushResult.data?.results) {
+        for (const r of pushResult.data.results) {
+          if (r.ok && r.hash && r.path) {
+            const f = toPush.find(p => p.serverPath === r.path);
+            if (f) {
+              cacheFile(projectId, r.path, {
+                hash: r.hash,
+                content: f.content,
+                updatedAt: new Date().toISOString()
+              });
+            }
+            info(`  ✓ pushed ${r.path}`);
+          } else if (!r.ok) {
+            info(`  ✗ push failed: ${r.path} — ${r.error || 'unknown error'}`);
+          }
+        }
+      } else if (!pushResult.ok) {
+        info(`  ✗ push error: ${pushResult.error}`);
+      }
+    }
+
+    // 6. Execute pulls
+    for (const f of toPull) {
+      const readResult = await callCLI('read_file', { path: f.serverPath });
+      if (!readResult.ok || !readResult.data) {
+        info(`  ✗ pull failed: ${f.serverPath}`);
+        continue;
+      }
+
+      const localFile = toLocalPath(f.class, f.name, baseDir);
+      const dir = dirname(localFile);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      writeFileSync(localFile, readResult.data.content || '');
+
+      if (readResult.data.hash) {
+        cacheFile(projectId, f.serverPath, {
+          hash: readResult.data.hash,
+          content: readResult.data.content,
+          updatedAt: readResult.data.updatedAt || new Date().toISOString()
+        });
+      }
+      info(`  ✓ pulled ${f.serverPath} → ${localFile}`);
+    }
+
+    out(`Sync complete: ${toPush.length} pushed, ${toPull.length} pulled`);
+  },
+
   // ─── edit ──────────────────────────────────────────────────
   async edit() {
     const path = subArgs[0];
     if (!path) die('Usage: cm64 edit <class/name> --old "text" --new "text"');
+    validatePath(path);
 
     const oldText = getFlag(['--old'], true);
     const newText = getFlag(['--new'], true);
@@ -368,6 +871,7 @@ const HANDLERS = {
   async diff() {
     const path = subArgs[0];
     if (!path) die('Usage: cm64 diff <class/name>');
+    validatePath(path);
 
     const projectId = getProjectId();
     if (!projectId) die('No active project. Run: cm64 use <project_id>');
@@ -435,6 +939,7 @@ const HANDLERS = {
     const path = subArgs[0];
     const fileId = getFlag(['--id'], true);
     if (!path && !fileId) die('Usage: cm64 delete <class/name> or --id <file_id>');
+    if (path) validatePath(path);
 
     const result = await callCLI('delete_file', { path, file_id: fileId });
     outputResult(result);
@@ -489,6 +994,7 @@ const HANDLERS = {
   async history() {
     const path = subArgs[0];
     if (!path) die('Usage: cm64 history <class/name>');
+    validatePath(path);
 
     const limit = getFlag(['--limit', '-n'], true);
     const result = await callCLI('file_history', { path, limit: limit ? parseInt(limit) : undefined });
@@ -571,6 +1077,57 @@ const HANDLERS = {
     outputResult(result);
   },
 
+  // ─── upload (asset) ────────────────────────────────────────
+  async upload() {
+    const name = subArgs[0];
+    if (!name) die('Usage: cm64 upload <filename> -f <local-file> [--folder <path>]');
+
+    const localFile = getFlag(['-f', '--file'], true);
+    const folder = getFlag(['--folder', '--dir'], true);
+    const mimeType = getFlag(['--mime', '--type'], true);
+
+    if (!localFile) die('File path required: cm64 upload hero.jpg -f ./hero.jpg');
+    if (!existsSync(localFile)) die(`File not found: ${localFile}`);
+
+    const buffer = readFileSync(localFile);
+    const data = buffer.toString('base64');
+
+    const sizeMB = (buffer.length / 1024 / 1024).toFixed(1);
+    info(`Uploading ${name} (${sizeMB}MB)...`);
+
+    const args = { name, data };
+    if (folder) args.folder = folder;
+    if (mimeType) args.mime_type = mimeType;
+
+    const result = await callCLI('upload_asset', args);
+
+    if (result.ok && !jsonOutput) {
+      out(result.data?.url || result.text);
+    } else {
+      outputResult(result);
+    }
+  },
+
+  // ─── assets (list) ───────────────────────────────────────
+  async assets() {
+    const folder = getFlag(['--folder', '--dir'], true) || subArgs[0];
+    const result = await callCLI('list_assets', { folder });
+    outputResult(result);
+  },
+
+  // ─── restore ─────────────────────────────────────────────
+  async restore() {
+    const path = subArgs[0];
+    if (!path) die('Usage: cm64 restore <class/name> --version <id>');
+    validatePath(path);
+
+    const versionId = getFlag(['--version', '--id', '-v'], true);
+    if (!versionId) die('Version required: cm64 restore component/Hero --version <version_id>\nUse cm64 history <class/name> to see versions.');
+
+    const result = await callCLI('restore_version', { path, version_id: versionId });
+    outputResult(result);
+  },
+
   // ─── debug ─────────────────────────────────────────────────
   async debug() {
     const pattern = getFlag(['--pattern', '-p'], true) || subArgs[0];
@@ -607,14 +1164,30 @@ FILES
   cm64 diff <class/name>          Compare cached vs remote
   cm64 delete <class/name>        Delete file
 
+PUSH / PULL
+  cm64 push components/Hero.jsx   Push local file to server
+  cm64 push ./components/         Push all files in folder
+  cm64 push ./                    Push all local files
+  cm64 pull component/Hero        Pull file and save locally
+  cm64 pull ./components/         Pull all components
+  cm64 pull ./                    Pull all files to local
+  cm64 sync ./                    Bidirectional sync
+  cm64 sync ./components/         Sync specific folder
+
 SEARCH
   cm64 search <pattern>           Grep across project files
   cm64 glob <pattern>             Glob file paths
+
+ASSETS
+  cm64 upload <name> -f <file>    Upload asset to S3 (images, videos, etc.)
+  cm64 upload logo.png -f ./logo.png --folder images
+  cm64 assets [--folder x]        List assets with S3 URLs
 
 DEPLOY
   cm64 snapshot <name>            Create snapshot
   cm64 deploy <id|latest>         Pin snapshot to production
   cm64 history <class/name>       File version history
+  cm64 restore <class/name>       Restore to version (--version <id>)
 
 PROJECT
   cm64 load                       Get system prompt (interpolated)
@@ -634,6 +1207,7 @@ FLAGS
   --json                          Structured JSON output
   --force, -F                     Skip conflict detection
   -f, --file <path>               Read content from local file
+  --diff                          Preview changes before writing
 
 ENVIRONMENT
   CM64_TOKEN                      Override token
@@ -656,6 +1230,30 @@ function timeSince(dateStr) {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+// ── Diff helper ─────────────────────────────────────────────
+
+function simpleDiff(oldStr, newStr) {
+  const oldLines = oldStr.split('\n');
+  const newLines = newStr.split('\n');
+  const lines = [];
+  const max = Math.max(oldLines.length, newLines.length);
+  for (let i = 0; i < max; i++) {
+    const o = oldLines[i];
+    const n = newLines[i];
+    if (o === n) continue;
+    if (o !== undefined && n !== undefined) {
+      lines.push(`  L${i + 1}:`);
+      lines.push(`  - ${o}`);
+      lines.push(`  + ${n}`);
+    } else if (o === undefined) {
+      lines.push(`  + L${i + 1}: ${n}`);
+    } else {
+      lines.push(`  - L${i + 1}: ${o}`);
+    }
+  }
+  return lines.length > 0 ? lines.join('\n') : null;
 }
 
 // ── Main ─────────────────────────────────────────────────────
@@ -683,6 +1281,8 @@ async function main() {
     'prompt': 'load',
     'sp': 'load',
     'skill': 'skills',
+    'asset': 'assets',
+    'rollback': 'restore',
   };
 
   const cmd = aliases[command] || command;
