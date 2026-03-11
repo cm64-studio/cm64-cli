@@ -88,6 +88,7 @@ cm64 read component/Header --json               # Structured JSON output
 | `cm64 edit <class/name> --old "x" --new "y"` | Find-and-replace edit |
 | `cm64 diff <class/name>` | Compare local cached vs remote version |
 | `cm64 delete <class/name>` | Delete a file |
+| `cm64 rename <class/name> <class/new-name>` | Rename or move a file (also: `mv`, `move`) |
 
 ### Search
 | Command | Description |

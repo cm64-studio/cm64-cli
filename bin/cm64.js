@@ -536,11 +536,11 @@ const HANDLERS = {
       const result = await callCLI('write_files', { files: payload });
 
       // Update cache for written files
-      if (result.ok && result.data?.results) {
+      if (result.data?.results) {
         const projectId = getProjectId();
         if (projectId) {
           for (const r of result.data.results) {
-            if (r.ok && r.hash && r.path) {
+            if (r.status === 'ok' && r.hash && r.path) {
               const f = payload.find(p => p.path === r.path);
               if (f) {
                 cacheFile(projectId, r.path, {
@@ -945,6 +945,30 @@ const HANDLERS = {
     outputResult(result);
   },
 
+  // ─── rename ───────────────────────────────────────────────
+  async rename() {
+    const from = subArgs[0];
+    const to = subArgs[1];
+    if (!from || !to) die('Usage: cm64 rename <class/name> <class/new-name>\n  cm64 rename page/old-slug page/new-slug\n  cm64 rename component/Hero component/HeroV2');
+    validatePath(from);
+    validatePath(to);
+
+    const result = await callCLI('rename_file', { from, to });
+
+    // Move cache entry from old path to new path
+    if (result.ok && result.data) {
+      const projectId = getProjectId();
+      if (projectId) {
+        const cached = getCachedFile(projectId, from);
+        if (cached) {
+          cacheFile(projectId, result.data.to, cached);
+        }
+      }
+    }
+
+    outputResult(result);
+  },
+
   // ─── search ────────────────────────────────────────────────
   async search() {
     const pattern = subArgs.join(' ');
@@ -1163,6 +1187,7 @@ FILES
   cm64 edit <class/name>          Edit file (--old "x" --new "y")
   cm64 diff <class/name>          Compare cached vs remote
   cm64 delete <class/name>        Delete file
+  cm64 rename <from> <to>          Rename/move file
 
 PUSH / PULL
   cm64 push components/Hero.jsx   Push local file to server
@@ -1272,6 +1297,8 @@ async function main() {
     'cat': 'read',
     'rm': 'delete',
     'remove': 'delete',
+    'mv': 'rename',
+    'move': 'rename',
     'snap': 'snapshot',
     'pub': 'deploy',
     'publish': 'deploy',
