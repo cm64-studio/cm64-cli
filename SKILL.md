@@ -5,13 +5,16 @@ This is the primary reference for AI models (Claude, GPT, etc.) using the `cm64`
 ## Quick Start
 
 ```bash
+cm64 register                # Create account (first time)
 cm64 login                   # Login with email + code (interactive)
 cm64 login <token>           # Or login with an existing PAT token
 cm64 projects                # List available projects
-cm64 use <project_id>        # Set active project (persists across commands)
+cm64 use <project_id|domain> # Set active project by ID or domain
+cm64 pull                    # Pull all files into ./domain/ folder
 cm64 ls                      # List all files
 cm64 read component/Header   # Read a file
 cm64 write component/Header --content '...'  # Write a file
+cm64 push                    # Push local changes to server
 cm64 status                  # Quick one-liner context check
 ```
 
@@ -71,10 +74,11 @@ cm64 read component/Header --json               # Structured JSON output
 ### Setup & Navigation
 | Command | Description |
 |---------|-------------|
+| `cm64 register` | Create account with email + challenge (also: `signup`, `reg`) |
 | `cm64 login` | Login with email + verification code (or `cm64 login <token>`) |
-| `cm64 projects [--query x]` | List projects you have access to |
-| `cm64 use <project_id>` | Set active project (persists) |
-| `cm64 create <name>` | Create new project |
+| `cm64 projects [--query x]` | List projects (also searches by domain when query contains a dot) |
+| `cm64 use <project_id\|domain>` | Set active project by ID or domain (persists) |
+| `cm64 create <name>` | Create new project (`--domain`, `--template`, `--description`) |
 | `cm64 status` | One-liner: name, domain, snapshot, file count |
 | `cm64 info` | Full project metadata, file counts, domains |
 
@@ -129,28 +133,38 @@ cm64 read component/Header --json               # Structured JSON output
 | `database` | JSON | MongoDB schema definitions |
 | `asset` | various | Static files (images, fonts) |
 
-## Workflow Example
+## Workflow Example (git-like)
 
 ```bash
-# 1. Set up
-cm64 use 69a5b...
+# 1. Set up — use domain or project ID
+cm64 use myapp.cm64.site
 
-# 2. Explore
-cm64 ls
-cm64 read page/home
-cm64 search "useState" --class component
+# 2. Pull all files locally (creates ./myapp.cm64.site/ folder)
+cm64 pull
 
-# 3. Build
-cm64 write component/Header --content 'export default function Header() { return <h1>Hello</h1> }'
-cm64 edit page/home --old '"title": "Old"' --new '"title": "New"'
+# 3. Load context — always check skills before building
+cm64 load
+cm64 skills
+cm64 learn <skill_name>
 
-# 4. Verify
-cm64 diff component/Header
-cm64 read page/home
+# 4. Work on files locally
+#    Edit components in ./myapp.cm64.site/components/
+#    Edit pages in ./myapp.cm64.site/pages/
 
-# 5. Deploy
+# 5. Push changes back
+cm64 push
+
+# 6. Deploy
 cm64 snapshot "v1.0 - New header"
 cm64 deploy latest
+```
+
+### Alternative: Direct read/write workflow
+
+```bash
+cm64 read page/home
+cm64 write component/Header --content '...'
+cm64 edit page/home --old '"title": "Old"' --new '"title": "New"'
 ```
 
 ## Conflict Detection
@@ -194,6 +208,7 @@ Location: `~/.cm64/config.json`
   "endpoint": "https://build.cm64.io/api/cli",
   "token": "cm64_pat_...",
   "project_id": "69a5b...",
-  "project_name": "My App"
+  "project_name": "My App",
+  "project_domain": "myapp.cm64.site"
 }
 ```

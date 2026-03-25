@@ -3,7 +3,7 @@
 // Each command is an independent HTTP call. No sessions.
 // Usage: cm64 <command> [args] [--json]
 
-import { loadConfig, saveConfig, getToken, getEndpoint, getProjectId, CONFIG_FILE } from '../lib/config.js';
+import { loadConfig, saveConfig, getToken, getEndpoint, getProjectId, getProjectDomain, CONFIG_FILE } from '../lib/config.js';
 import { callCLI } from '../lib/api.js';
 import { cacheFile, getCachedFile, getCachedHash } from '../lib/cache.js';
 import { createInterface } from 'readline';
@@ -269,7 +269,13 @@ const HANDLERS = {
 
       if (!sendRes.ok) {
         if (sendData.redirectToSignup) {
-          die(`No account found for ${email}. Sign up at https://build.cm64.io first.`);
+          const doRegister = await prompt(`No account found for ${email}. Register now? (y/n) `);
+          if (doRegister.toLowerCase() === 'y') {
+            // Transition to registration flow
+            await HANDLERS.register();
+            return;
+          }
+          die('Use cm64 register to create an account.');
         }
         die(sendData.error || 'Failed to send code.');
       }
@@ -313,6 +319,101 @@ const HANDLERS = {
     }
   },
 
+  // ─── register ──────────────────────────────────────────────
+  async register() {
+    if (!process.stdin.isTTY) {
+      die('Interactive registration requires a terminal.');
+    }
+
+    const config = loadConfig();
+    const endpoint = getFlag(['--endpoint', '-e'], true);
+    const baseEndpoint = endpoint || config.endpoint || 'https://build.cm64.io/api/cli';
+    const authBase = baseEndpoint.replace(/\/api\/cli\/?$/, '/api/auth');
+
+    out('CM64 CLI Registration\n');
+
+    // Step 1: Get challenge
+    info('Getting verification challenge...');
+    let challengeId, question;
+    try {
+      const res = await fetch(`${authBase}/cli-challenge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) die(data.error || 'Failed to get challenge.');
+      challengeId = data.challenge_id;
+      question = data.question;
+    } catch (e) {
+      die(`Could not reach server: ${e.message}`);
+    }
+
+    // Step 2: Solve challenge
+    const answer = await prompt(`${question} `);
+    if (!answer) die('Answer required.');
+
+    // Step 3: Get email
+    const email = await prompt('Email: ');
+    if (!email || !email.includes('@')) die('Valid email required.');
+
+    // Step 4: Get name
+    const name = await prompt('Name: ');
+
+    // Step 5: Send verification code
+    info('Sending verification code...');
+    try {
+      const sendRes = await fetch(`${authBase}/send-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, isSignup: true })
+      });
+      const sendData = await sendRes.json();
+      if (!sendRes.ok) die(sendData.error || 'Failed to send code.');
+      out('Code sent! Check your email.\n');
+    } catch (e) {
+      die(`Could not reach server: ${e.message}`);
+    }
+
+    // Step 6: Get code
+    const code = await prompt('Code: ');
+    if (!code || code.length < 6) die('Enter the 6-digit code from your email.');
+
+    // Step 7: Register
+    info('Creating account...');
+    try {
+      const regRes = await fetch(`${authBase}/cli-register`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': `cm64-cli/${pkg.version}`
+        },
+        body: JSON.stringify({
+          email,
+          name: name || undefined,
+          code: code.trim(),
+          challenge_id: challengeId,
+          challenge_answer: answer.trim()
+        })
+      });
+      const regData = await regRes.json();
+      if (!regRes.ok) die(regData.error || 'Registration failed.');
+
+      // Save token
+      const updates = { token: regData.token };
+      if (endpoint) updates.endpoint = endpoint;
+      saveConfig(updates);
+
+      out(`\nRegistered as ${regData.user?.name || email}`);
+      info(`Token saved to ${CONFIG_FILE}`);
+      out('\nNext steps:');
+      out('  cm64 create "My App"          Create your first project');
+      out('  cm64 projects                 List your projects');
+    } catch (e) {
+      die(`Registration failed: ${e.message}`);
+    }
+  },
+
   // ─── projects ──────────────────────────────────────────────
   async projects() {
     const query = subArgs.join(' ') || undefined;
@@ -322,15 +423,33 @@ const HANDLERS = {
 
   // ─── use ───────────────────────────────────────────────────
   async use() {
-    const projectId = subArgs[0];
-    if (!projectId) die('Usage: cm64 use <project_id>');
+    const target = subArgs[0];
+    if (!target) die('Usage: cm64 use <project_id|domain>');
 
-    const result = await callCLI('set_project', {}, { projectId });
-    if (result.ok) {
-      saveConfig({ project_id: projectId, project_name: result.data?.name || null });
-      info(`Project saved to config.`);
+    // Detect domain (contains a dot) vs project ID
+    if (target.includes('.')) {
+      const result = await callCLI('find_project_by_domain', { domain: target });
+      if (result.ok) {
+        saveConfig({
+          project_id: result.data?.id || null,
+          project_name: result.data?.name || null,
+          project_domain: result.data?.domain || target
+        });
+        info(`Project saved to config.`);
+      }
+      outputResult(result);
+    } else {
+      const result = await callCLI('set_project', {}, { projectId: target });
+      if (result.ok) {
+        saveConfig({
+          project_id: target,
+          project_name: result.data?.name || null,
+          project_domain: result.data?.domain || null
+        });
+        info(`Project saved to config.`);
+      }
+      outputResult(result);
     }
-    outputResult(result);
   },
 
   // ─── create ────────────────────────────────────────────────
@@ -338,8 +457,27 @@ const HANDLERS = {
     const name = subArgs.join(' ');
     if (!name) die('Usage: cm64 create <project_name>');
 
-    const description = getFlag(['--description', '-d'], true);
-    const result = await callCLI('create_project', { name, description });
+    const description = getFlag(['--description'], true);
+    const customDomain = getFlag(['--domain', '-d'], true);
+    const templateDomain = getFlag(['--template', '-t'], true);
+
+    const args = { name, description };
+    if (customDomain) args.custom_domain = customDomain;
+    if (templateDomain) args.template_domain = templateDomain;
+
+    const result = await callCLI('create_project', args);
+    if (result.ok && result.data) {
+      saveConfig({
+        project_id: result.data.id,
+        project_name: result.data.name || name,
+        project_domain: result.data.domain || null
+      });
+      info(`Project saved to config.`);
+      out('\nNext steps:');
+      out('  cm64 pull                     Pull project files locally');
+      out('  cm64 ls                       List project files');
+      out('  cm64 load                     Load system prompt context');
+    }
     outputResult(result);
   },
 
@@ -490,8 +628,22 @@ const HANDLERS = {
 
   // ─── push ──────────────────────────────────────────────────
   async push() {
-    const target = subArgs[0];
-    if (!target) die('Usage: cm64 push <local-path>\n  cm64 push components/Hero.jsx\n  cm64 push ./components/\n  cm64 push ./');
+    let target = subArgs[0];
+
+    // No argument: auto-detect domain folder or current dir
+    if (!target) {
+      const domain = getProjectDomain();
+      if (domain && existsSync(`./${domain}`) && statSync(`./${domain}`).isDirectory()) {
+        target = `./${domain}/`;
+        info(`Pushing from ./${domain}/`);
+      } else if (domain) {
+        // No domain folder, try current dir
+        target = './';
+        info('Pushing from ./');
+      } else {
+        die('Usage: cm64 push [local-path]\n  cm64 push                     Push from domain folder or ./\n  cm64 push components/Hero.jsx\n  cm64 push ./components/\n  cm64 push ./');
+      }
+    }
 
     const stat = existsSync(target) ? statSync(target) : null;
 
@@ -593,13 +745,25 @@ const HANDLERS = {
 
   // ─── pull ──────────────────────────────────────────────────
   async pull() {
-    const target = subArgs[0];
-    if (!target) die('Usage: cm64 pull <class/name|local-path|./>\n  cm64 pull component/Hero\n  cm64 pull ./components/\n  cm64 pull ./');
+    let target = subArgs[0];
 
-    const outDir = getFlag(['-o', '--out'], true) || '.';
+    // No argument: auto-detect — pull all files into domain folder or ./
+    if (!target) {
+      target = './';
+    }
 
-    // Pull all files (cm64 pull ./ or cm64 pull .)
+    const outDir = getFlag(['-o', '--out'], true);
+
+    // Pull all files (cm64 pull ./ or cm64 pull . or cm64 pull with no args)
     if (target === './' || target === '.') {
+      // Determine output directory: use domain folder if available
+      let baseDir = outDir || '.';
+      const domain = getProjectDomain();
+      if (!outDir && domain) {
+        baseDir = `./${domain}`;
+        info(`Pulling into ./${domain}/`);
+      }
+
       info('Pulling all files...');
       const result = await callCLI('list_files', {});
       if (!result.ok) { outputResult(result); return; }
@@ -619,7 +783,7 @@ const HANDLERS = {
         const readResult = await callCLI('read_file', { path: serverPath });
         if (!readResult.ok || !readResult.data) continue;
 
-        const localFile = toLocalPath(cls, name, outDir);
+        const localFile = toLocalPath(cls, name, baseDir);
         const dir = dirname(localFile);
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
         writeFileSync(localFile, readResult.data.content || '');
@@ -712,7 +876,16 @@ const HANDLERS = {
 
   // ─── sync ─────────────────────────────────────────────────
   async sync() {
-    const target = subArgs[0] || './';
+    let target = subArgs[0];
+    if (!target) {
+      const domain = getProjectDomain();
+      if (domain && existsSync(`./${domain}`) && statSync(`./${domain}`).isDirectory()) {
+        target = `./${domain}/`;
+        info(`Syncing ./${domain}/`);
+      } else {
+        target = './';
+      }
+    }
     const projectId = getProjectId();
     if (!projectId) die('No active project. Run: cm64 use <project_id>');
 
@@ -1171,11 +1344,15 @@ const HANDLERS = {
     out(`CM64 CLI v${pkg.version} — Stateless CLI for CM64 Studio
 
 SETUP
+  cm64 register                   Create account (email + challenge)
   cm64 login                      Login with email + verification code
   cm64 login <token>              Login with an existing PAT token
-  cm64 projects [--query x]       List projects
-  cm64 use <project_id>           Set active project
+  cm64 projects [--query x]       List projects (searches domains too)
+  cm64 use <project_id|domain>    Set active project (by ID or domain)
   cm64 create <name>              Create new project
+    --domain, -d <subdomain>        Custom subdomain
+    --template, -t <domain>         Clone files from template project
+    --description <text>            Project description
   cm64 status                     Quick context check (one-liner)
   cm64 info                       Full project metadata
 
@@ -1187,17 +1364,16 @@ FILES
   cm64 edit <class/name>          Edit file (--old "x" --new "y")
   cm64 diff <class/name>          Compare cached vs remote
   cm64 delete <class/name>        Delete file
-  cm64 rename <from> <to>          Rename/move file
+  cm64 rename <from> <to>         Rename/move file
 
-PUSH / PULL
-  cm64 push components/Hero.jsx   Push local file to server
-  cm64 push ./components/         Push all files in folder
-  cm64 push ./                    Push all local files
-  cm64 pull component/Hero        Pull file and save locally
+WORKFLOW (git-like)
+  cm64 pull                       Pull project into ./domain/ folder
+  cm64 push                       Push local changes to server
+  cm64 sync                       Bidirectional sync
+  cm64 pull component/Hero        Pull single file
+  cm64 push components/Hero.jsx   Push single file
   cm64 pull ./components/         Pull all components
-  cm64 pull ./                    Pull all files to local
-  cm64 sync ./                    Bidirectional sync
-  cm64 sync ./components/         Sync specific folder
+  cm64 push ./                    Push all local files
 
 SEARCH
   cm64 search <pattern>           Grep across project files
@@ -1310,6 +1486,9 @@ async function main() {
     'skill': 'skills',
     'asset': 'assets',
     'rollback': 'restore',
+    'signup': 'register',
+    'reg': 'register',
+    'clone': 'pull',
   };
 
   const cmd = aliases[command] || command;
@@ -1319,15 +1498,15 @@ async function main() {
     die(`Unknown command: ${command}\nRun 'cm64 help' for usage.`);
   }
 
-  // Check token for commands that need it (everything except login and help)
-  if (cmd !== 'login' && cmd !== 'help') {
+  // Check token for commands that need it (everything except login, register, and help)
+  if (!['login', 'register', 'help'].includes(cmd)) {
     if (!getToken()) {
       die('Not logged in. Run: cm64 login');
     }
   }
 
   // Check project for commands that need it
-  const needsProject = !['login', 'help', 'projects', 'create', 'use', 'learn', 'skills'].includes(cmd);
+  const needsProject = !['login', 'register', 'help', 'projects', 'create', 'use', 'learn', 'skills'].includes(cmd);
   if (needsProject && !getProjectId()) {
     die('No active project. Run: cm64 use <project_id>');
   }
