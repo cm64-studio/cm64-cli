@@ -1,6 +1,6 @@
 {
   "name": "@cm64/cli",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "CM64 CLI — Stateless command-line tool for CM64 Studio",
   "type": "module",
   "bin": {
