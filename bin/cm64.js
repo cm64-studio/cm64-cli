@@ -86,7 +86,7 @@ function validatePath(path) {
 
 // ── Path Mapping (local ↔ server) ───────────────────────────
 
-// Map folder name (plural or singular) → file class
+// Map folder name → file class (accepts plural for backward compat)
 const FOLDER_TO_CLASS = {
   'pages': 'page', 'page': 'page',
   'components': 'component', 'component': 'component',
@@ -112,9 +112,9 @@ const EXT_TO_CLASS = {
 
 /**
  * Parse a local file path into { class, name, ext }.
- * e.g. "components/Hero.jsx" → { class: "component", name: "Hero", ext: ".jsx" }
- *      "settings/theme.json" → { class: "setting", name: "theme", ext: ".json" }
- *      "component/Nav"       → { class: "component", name: "Nav", ext: "" }  (server-style path)
+ * e.g. "component/Hero.jsx" → { class: "component", name: "Hero", ext: ".jsx" }
+ *      "setting/theme.json"  → { class: "setting", name: "theme", ext: ".json" }
+ *      "component/Nav"       → { class: "component", name: "Nav", ext: "" }
  */
 function parseLocalPath(localPath) {
   // Normalize separators and strip leading ./
@@ -127,7 +127,7 @@ function parseLocalPath(localPath) {
   const cls = FOLDER_TO_CLASS[folder];
   if (!cls) return null;
 
-  // Remaining parts form the name (support nested like components/ui/Button.jsx)
+  // Remaining parts form the name (support nested like component/ui/Button.jsx)
   const rest = parts.slice(1).join('/');
   const ext = extname(rest);
   const name = ext ? rest.slice(0, -ext.length) : rest;
@@ -137,15 +137,10 @@ function parseLocalPath(localPath) {
 
 /**
  * Convert server path (class/name) to local file path.
- * e.g. { class: "component", name: "Hero" } → "components/Hero.jsx"
+ * e.g. { class: "component", name: "Hero" } → "component/Hero.jsx"
  */
 function toLocalPath(cls, name, baseDir = '.') {
-  // Use plural folder names for local filesystem
-  const folderMap = {
-    page: 'pages', component: 'components', function: 'functions',
-    css: 'css', setting: 'settings', database: 'databases', asset: 'assets',
-  };
-  const folder = folderMap[cls] || cls;
+  const folder = cls; // singular everywhere: component/, page/, function/, etc.
   const ext = CLASS_EXT[cls] || '';
   // Only add ext if name doesn't already have one
   const fileName = extname(name) ? name : name + ext;
@@ -214,6 +209,20 @@ function prompt(question) {
   });
 }
 
+// ── Safe JSON parse for fetch responses ─────────────────────
+
+async function safeJson(res) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Non-JSON response (rate limit, proxy error, etc.)
+    const status = res.status;
+    const msg = text.trim() || `HTTP ${status}`;
+    return { ok: false, error: `${msg} (HTTP ${status})` };
+  }
+}
+
 // ── Commands ─────────────────────────────────────────────────
 
 const HANDLERS = {
@@ -265,7 +274,7 @@ const HANDLERS = {
         body: JSON.stringify({ email })
       });
 
-      const sendData = await sendRes.json();
+      const sendData = await safeJson(sendRes);
 
       if (!sendRes.ok) {
         if (sendData.redirectToSignup) {
@@ -301,7 +310,7 @@ const HANDLERS = {
         body: JSON.stringify({ email, code: code.trim() })
       });
 
-      const verifyData = await verifyRes.json();
+      const verifyData = await safeJson(verifyRes);
 
       if (!verifyRes.ok) {
         die(verifyData.error || 'Verification failed.');
@@ -341,7 +350,7 @@ const HANDLERS = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (!res.ok || !data.ok) die(data.error || 'Failed to get challenge.');
       challengeId = data.challenge_id;
       question = data.question;
@@ -368,7 +377,7 @@ const HANDLERS = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, isSignup: true })
       });
-      const sendData = await sendRes.json();
+      const sendData = await safeJson(sendRes);
       if (!sendRes.ok) die(sendData.error || 'Failed to send code.');
       out('Code sent! Check your email.\n');
     } catch (e) {
@@ -396,7 +405,7 @@ const HANDLERS = {
           challenge_answer: answer.trim()
         })
       });
-      const regData = await regRes.json();
+      const regData = await safeJson(regRes);
       if (!regRes.ok) die(regData.error || 'Registration failed.');
 
       // Save token
@@ -454,12 +463,13 @@ const HANDLERS = {
 
   // ─── create ────────────────────────────────────────────────
   async create() {
-    const name = subArgs.join(' ');
-    if (!name) die('Usage: cm64 create <project_name>');
-
     const description = getFlag(['--description'], true);
     const customDomain = getFlag(['--domain', '-d'], true);
     const templateDomain = getFlag(['--template', '-t'], true);
+
+    // Build name from remaining positional args (after flags are stripped from argv)
+    const name = argv.slice(1).join(' ');
+    if (!name) die('Usage: cm64 create <project_name>');
 
     const args = { name, description };
     if (customDomain) args.custom_domain = customDomain;
@@ -641,7 +651,7 @@ const HANDLERS = {
         target = './';
         info('Pushing from ./');
       } else {
-        die('Usage: cm64 push [local-path]\n  cm64 push                     Push from domain folder or ./\n  cm64 push components/Hero.jsx\n  cm64 push ./components/\n  cm64 push ./');
+        die('Usage: cm64 push [local-path]\n  cm64 push                     Push from domain folder or ./\n  cm64 push component/Hero.jsx\n  cm64 push ./component/\n  cm64 push ./');
       }
     }
 
@@ -649,7 +659,7 @@ const HANDLERS = {
 
     // Push a directory (push all files inside)
     if (stat?.isDirectory()) {
-      // Check if it's a class folder directly (e.g., ./components/) or a root dir (e.g., ./)
+      // Check if it's a class folder directly (e.g., ./component/) or a root dir (e.g., ./)
       const dirName = basename(target.replace(/\/+$/, ''));
       const cls = FOLDER_TO_CLASS[dirName];
 
@@ -664,7 +674,7 @@ const HANDLERS = {
         files = scanLocalFiles(target);
       }
 
-      if (files.length === 0) die(`No pushable files found in ${target}\n  Expected folders: components/, pages/, functions/, css/, settings/, databases/`);
+      if (files.length === 0) die(`No pushable files found in ${target}\n  Expected folders: component/, page/, function/, css/, setting/, database/`);
 
       info(`Pushing ${files.length} file(s)...`);
 
@@ -714,7 +724,7 @@ const HANDLERS = {
     if (!stat) die(`Not found: ${target}`);
 
     const parsed = parseLocalPath(target);
-    if (!parsed) die(`Can't detect file class from path: ${target}\n  Expected format: <class-folder>/<name>.<ext>  (e.g., components/Hero.jsx, settings/theme.json)`);
+    if (!parsed) die(`Can't detect file class from path: ${target}\n  Expected format: <class>/<name>.<ext>  (e.g., component/Hero.jsx, setting/theme.json)`);
 
     const serverPath = `${parsed.class}/${parsed.name}`;
     const content = readFileSync(target, 'utf-8');
@@ -804,7 +814,7 @@ const HANDLERS = {
       return;
     }
 
-    // Pull by class folder (cm64 pull ./components/ or cm64 pull components/)
+    // Pull by class folder (cm64 pull ./component/ or cm64 pull component/)
     const dirName = basename(target.replace(/\/+$/, ''));
     const folderClass = FOLDER_TO_CLASS[dirName];
     if (folderClass && (target.endsWith('/') || !target.includes('.'))) {
@@ -839,7 +849,7 @@ const HANDLERS = {
       return;
     }
 
-    // Pull a single file: accept either "component/Hero" or "components/Hero.jsx"
+    // Pull a single file: "component/Hero" or "component/Hero.jsx"
     let serverPath;
     const parsed = parseLocalPath(target);
     if (parsed) {
@@ -848,7 +858,7 @@ const HANDLERS = {
       validatePath(target);
       serverPath = target;
     } else {
-      die(`Can't parse path: ${target}\n  Use class/name (e.g., component/Hero) or local path (e.g., components/Hero.jsx)`);
+      die(`Can't parse path: ${target}\n  Use class/name (e.g., component/Hero or component/Hero.jsx)`);
     }
 
     info(`Pulling ${serverPath}...`);
@@ -1144,11 +1154,11 @@ const HANDLERS = {
 
   // ─── search ────────────────────────────────────────────────
   async search() {
-    const pattern = subArgs.join(' ');
-    if (!pattern) die('Usage: cm64 search <pattern>');
-
     const fileClass = getFlag(['--class', '-c'], true);
     const maxResults = getFlag(['--limit', '-n'], true);
+
+    const pattern = argv.slice(1).join(' ');
+    if (!pattern) die('Usage: cm64 search <pattern>');
 
     const result = await callCLI('grep', {
       pattern,
@@ -1169,10 +1179,11 @@ const HANDLERS = {
 
   // ─── snapshot ──────────────────────────────────────────────
   async snapshot() {
-    const name = subArgs.join(' ');
+    const description = getFlag(['--description', '-d'], true);
+
+    const name = argv.slice(1).join(' ');
     if (!name) die('Usage: cm64 snapshot <name>');
 
-    const description = getFlag(['--description', '-d'], true);
     const result = await callCLI('snapshot', { name, description });
     outputResult(result);
   },
@@ -1371,8 +1382,8 @@ WORKFLOW (git-like)
   cm64 push                       Push local changes to server
   cm64 sync                       Bidirectional sync
   cm64 pull component/Hero        Pull single file
-  cm64 push components/Hero.jsx   Push single file
-  cm64 pull ./components/         Pull all components
+  cm64 push component/Hero.jsx    Push single file
+  cm64 pull ./component/          Pull all components
   cm64 push ./                    Push all local files
 
 SEARCH

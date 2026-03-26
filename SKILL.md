@@ -27,7 +27,7 @@ NEVER use plural: ~~pages~~, ~~components~~, ~~functions~~, ~~settings~~
 
 ```bash
 cm64 read component/Header    # correct
-cm64 read components/Header   # auto-corrected but avoid
+cm64 read components/Header   # auto-corrected to singular, but avoid
 ```
 
 ### 2. `cm64 use` persists
@@ -148,8 +148,8 @@ cm64 skills
 cm64 learn <skill_name>
 
 # 4. Work on files locally
-#    Edit components in ./myapp.cm64.site/components/
-#    Edit pages in ./myapp.cm64.site/pages/
+#    Edit components in ./myapp.cm64.site/component/
+#    Edit pages in ./myapp.cm64.site/page/
 
 # 5. Push changes back
 cm64 push
