@@ -11,6 +11,8 @@
     "lib/",
     "scripts/",
     "skill/",
+    "skills/",
+    ".claude-plugin/",
     "SKILL.md",
     "README.md"
   ],

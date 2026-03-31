@@ -425,7 +425,9 @@ const HANDLERS = {
 
   // ─── projects ──────────────────────────────────────────────
   async projects() {
-    const query = subArgs.join(' ') || undefined;
+    const queryFlag = getFlag(['--query', '-q'], true);
+    const positional = argv.slice(1).join(' ');
+    const query = queryFlag || positional || undefined;
     const result = await callCLI('list_projects', { query });
     outputResult(result);
   },
@@ -468,8 +470,9 @@ const HANDLERS = {
     const templateDomain = getFlag(['--template', '-t'], true);
 
     // Build name from remaining positional args (after flags are stripped from argv)
-    const name = argv.slice(1).join(' ');
-    if (!name) die('Usage: cm64 create <project_name>');
+    const nameArgs = argv.slice(1).filter(a => !a.startsWith('-'));
+    const name = nameArgs.join(' ');
+    if (!name) die('Usage: cm64 create <project_name> [--domain <sub>] [--template <domain>] [--description <text>]');
 
     const args = { name, description };
     if (customDomain) args.custom_domain = customDomain;
@@ -489,6 +492,12 @@ const HANDLERS = {
       out('  cm64 load                     Load system prompt context');
     }
     outputResult(result);
+  },
+
+  // ─── delete-project ─────────────────────────────────────────
+  async 'delete-project'() {
+    out('Project deletion is not available via CLI for safety reasons.');
+    out('Please delete projects from the dashboard at https://build.cm64.io');
   },
 
   // ─── info ──────────────────────────────────────────────────
@@ -1364,6 +1373,7 @@ SETUP
     --domain, -d <subdomain>        Custom subdomain
     --template, -t <domain>         Clone files from template project
     --description <text>            Project description
+  cm64 delete-project              Delete project (via dashboard)
   cm64 status                     Quick context check (one-liner)
   cm64 info                       Full project metadata
 
@@ -1468,6 +1478,44 @@ function simpleDiff(oldStr, newStr) {
   return lines.length > 0 ? lines.join('\n') : null;
 }
 
+// ── Per-Subcommand Help ──────────────────────────────────────
+
+const SUBCOMMAND_HELP = {
+  login:      'Usage: cm64 login [<token>] [--endpoint <url>]\n  Interactive email+code login, or direct PAT token login.',
+  register:   'Usage: cm64 register [--endpoint <url>]\n  Create a new CM64 account (email + challenge).',
+  projects:   'Usage: cm64 projects [--query <search>] [--json]\n  List all projects. Use --query to filter by name or domain.',
+  use:        'Usage: cm64 use <project_id|domain>\n  Set the active project by ID or domain.',
+  create:     'Usage: cm64 create <name> [--domain <sub>] [--template <domain>] [--description <text>]\n  Create a new project.',
+  'delete-project': 'Project deletion is only available from the dashboard at https://build.cm64.io',
+  status:     'Usage: cm64 status [--json]\n  Quick one-liner context check.',
+  info:       'Usage: cm64 info [--json]\n  Full project metadata.',
+  ls:         'Usage: cm64 ls [--class <type>] [--json]\n  List project files. Filter by class: page, component, function, css, setting, database, asset.',
+  read:       'Usage: cm64 read <class/name> [--json]\n  Read a file and cache its hash for conflict detection.',
+  write:      'Usage: cm64 write <class/name> [--content <text>] [-f <file>] [--diff]\n  Write file content from --content, -f file, or stdin.',
+  'write-many':'Usage: cm64 write-many < files.json\n  Bulk write files from JSON array on stdin.',
+  edit:       'Usage: cm64 edit <class/name> --old "text" --new "text"\n  Find-and-replace within a file.',
+  diff:       'Usage: cm64 diff <class/name>\n  Compare locally cached version vs remote.',
+  delete:     'Usage: cm64 delete <class/name>\n  Delete a file from the project.',
+  rename:     'Usage: cm64 rename <class/old_name> <class/new_name>\n  Rename or move a file.',
+  pull:       'Usage: cm64 pull [<class/name>|<./folder/>] [--force]\n  Pull project files to local directory.',
+  push:       'Usage: cm64 push [<class/name.ext>|<./folder/>] [--force] [--diff]\n  Push local files to server.',
+  search:     'Usage: cm64 search <pattern> [--class <type>] [--limit <n>]\n  Grep across project files.',
+  glob:       'Usage: cm64 glob <pattern>\n  Glob file paths in the project.',
+  snapshot:   'Usage: cm64 snapshot <name> [--description <text>]\n  Create a named snapshot.',
+  deploy:     'Usage: cm64 deploy <snapshot_id|latest> [--domain <d>]\n  Pin a snapshot to production.',
+  history:    'Usage: cm64 history <class/name>\n  Show version history for a file.',
+  restore:    'Usage: cm64 restore <class/name> --version <id>\n  Restore a file to a previous version.',
+  upload:     'Usage: cm64 upload <name> -f <file> [--folder <path>] [--mime <type>]\n  Upload an asset (image, video, etc.).',
+  assets:     'Usage: cm64 assets [--folder <path>]\n  List uploaded assets with S3 URLs.',
+  buildme:    'Usage: cm64 buildme [--set "content"] [--append]\n  Read or update BUILDME.md.',
+  load:       'Usage: cm64 load [--raw]\n  Get interpolated system prompt (--raw for uninterpolated).',
+  skills:     'Usage: cm64 skills [<name>]\n  List skills or show details for a specific skill.',
+  learn:      'Usage: cm64 learn [<skill>] [--offset <n>] [--limit <n>]\n  Read full skill documentation.',
+  users:      'Usage: cm64 users [--search <x>] [--role <r>] [--status <s>] [--page <n>] [--limit <n>]\n  List app end-users.',
+  analytics:  'Usage: cm64 analytics [--days <n>] [--event <e>]\n  View analytics data.',
+  debug:      'Usage: cm64 debug [--pattern <p>] [--level <l>] [--limit <n>] [--since <date>]\n  View application logs.',
+};
+
 // ── Main ─────────────────────────────────────────────────────
 
 async function main() {
@@ -1504,20 +1552,31 @@ async function main() {
 
   const cmd = aliases[command] || command;
 
+  // ── Per-subcommand --help ──────────────────────────────────
+  if (subArgs.includes('--help') || subArgs.includes('-h')) {
+    const usage = SUBCOMMAND_HELP[cmd];
+    if (usage) {
+      out(usage);
+    } else {
+      out(`cm64 ${cmd} — no detailed help available.\nRun 'cm64 help' for full usage.`);
+    }
+    process.exit(0);
+  }
+
   const handler = HANDLERS[cmd];
   if (!handler) {
     die(`Unknown command: ${command}\nRun 'cm64 help' for usage.`);
   }
 
   // Check token for commands that need it (everything except login, register, and help)
-  if (!['login', 'register', 'help'].includes(cmd)) {
+  if (!['login', 'register', 'help', 'delete-project'].includes(cmd)) {
     if (!getToken()) {
       die('Not logged in. Run: cm64 login');
     }
   }
 
   // Check project for commands that need it
-  const needsProject = !['login', 'register', 'help', 'projects', 'create', 'use', 'learn', 'skills'].includes(cmd);
+  const needsProject = !['login', 'register', 'help', 'projects', 'create', 'use', 'learn', 'skills', 'delete-project'].includes(cmd);
   if (needsProject && !getProjectId()) {
     die('No active project. Run: cm64 use <project_id>');
   }
