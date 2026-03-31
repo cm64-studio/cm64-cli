@@ -70,7 +70,7 @@ function outputResult(result) {
 
 // ── Path Validation ─────────────────────────────────────────
 
-const VALID_CLASSES = ['page', 'component', 'function', 'css', 'setting', 'database', 'asset'];
+const VALID_CLASSES = ['page', 'component', 'function', 'setting', 'database', 'asset'];
 
 function validatePath(path) {
   if (!path || !path.includes('/')) return; // let server handle missing/malformed paths
@@ -91,7 +91,6 @@ const FOLDER_TO_CLASS = {
   'pages': 'page', 'page': 'page',
   'components': 'component', 'component': 'component',
   'functions': 'function', 'function': 'function',
-  'css': 'css',
   'settings': 'setting', 'setting': 'setting',
   'databases': 'database', 'database': 'database',
   'assets': 'asset', 'asset': 'asset',
@@ -100,13 +99,12 @@ const FOLDER_TO_CLASS = {
 // Map file class → default extension
 const CLASS_EXT = {
   page: '.json', component: '.jsx', function: '.js',
-  css: '.css', setting: '.json', database: '.json', asset: '',
+  setting: '.json', database: '.json', asset: '',
 };
 
 // Map extension → likely class (when ambiguous, prefer component)
 const EXT_TO_CLASS = {
   '.jsx': 'component', '.tsx': 'component',
-  '.css': 'css', '.scss': 'css',
   '.json': 'setting',
 };
 
@@ -1489,7 +1487,7 @@ const SUBCOMMAND_HELP = {
   'delete-project': 'Project deletion is only available from the dashboard at https://build.cm64.io',
   status:     'Usage: cm64 status [--json]\n  Quick one-liner context check.',
   info:       'Usage: cm64 info [--json]\n  Full project metadata.',
-  ls:         'Usage: cm64 ls [--class <type>] [--json]\n  List project files. Filter by class: page, component, function, css, setting, database, asset.',
+  ls:         'Usage: cm64 ls [--class <type>] [--json]\n  List project files. Filter by class: page, component, function, setting, database, asset.',
   read:       'Usage: cm64 read <class/name> [--json]\n  Read a file and cache its hash for conflict detection.',
   write:      'Usage: cm64 write <class/name> [--content <text>] [-f <file>] [--diff]\n  Write file content from --content, -f file, or stdin.',
   'write-many':'Usage: cm64 write-many < files.json\n  Bulk write files from JSON array on stdin.',

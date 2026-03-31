@@ -1,119 +1,164 @@
 ---
 name: cm64
-description: Build and deploy web apps with CM64 Studio CLI — pull, edit, push, deploy
+description: Build and deploy web apps with CM64 Studio CLI — pull, edit, push, deploy. Use when working with cm64 commands or CM64 Studio projects.
 argument-hint: "[command or question]"
 ---
 
-# CM64 CLI — Claude Code Skill
+# CM64 CLI — Agent Reference
 
-Use this skill when working with CM64 Studio projects via the `cm64` CLI.
+Use this when working with CM64 Studio projects via the `cm64` CLI.
 
-## Getting Started
-
-```bash
-# Register (first time)
-cm64 register
-
-# Or login (existing account)
-cm64 login
-
-# Create a project
-cm64 create "My App" --domain myapp --description "A web app built with CM64"
-
-# Or select existing project (by ID or domain)
-cm64 use myapp.cm64.site
-```
-
-## Recommended Workflow
-
-The CM64 CLI works like git — pull files locally, work on them, push changes back.
+## Quick Start
 
 ```bash
-# 1. Pull project files into a local domain folder
-cm64 pull
-
-# 2. Work on files locally (edit components, pages, etc.)
-#    Files are organized in folders: component/, page/, function/, css/, setting/, database/
-
-# 3. Push changes back to the server
-cm64 push
-
-# 4. Deploy
-cm64 snapshot "v1.0 - Feature X"
-cm64 deploy latest
+cm64 register                # Create account (first time)
+cm64 login                   # Login with email + code
+cm64 projects                # List projects
+cm64 use <project_id|domain> # Set active project
+cm64 pull                    # Pull all files locally
+cm64 push                    # Push changes back
 ```
 
-## Context Loading (Important!)
+## Rules
 
-Before building anything, always load available context:
+1. **File classes are SINGULAR**: `page`, `component`, `function`, `setting`, `database`, `asset` — never plural
+2. **`cm64 use` persists** — set once, stays active. Don't repeat unless switching projects
+3. **Read before write** — `cm64 read` caches the file hash, `cm64 write` uses it for conflict detection
+4. **Load context first** — always run `cm64 load` + `cm64 skills` + `cm64 learn <skill>` before building
+5. **Pipe-friendly** — stdout = results, stderr = status. Use `--json` for structured output. Stdin auto-detected for piping content
+
+## Workflow
+
+### Git-like (recommended)
 
 ```bash
-# Load the project's system prompt (full context about the project)
-cm64 load
-
-# List available skills — these contain implementation patterns and rules
-cm64 skills
-
-# Read specific skill documentation
-cm64 learn <skill_name>
+cm64 use myapp.cm64.site          # Set project
+cm64 load                          # Load system prompt context
+cm64 skills                        # List available skills
+cm64 learn <skill_name>            # Read skill docs before building
+cm64 pull                          # Pull files into ./domain/ folder
+# ... edit files locally ...
+cm64 push                          # Push changes
+cm64 snapshot "v1.0 - Feature X"   # Snapshot
+cm64 deploy latest                 # Deploy
 ```
 
-**Key rule**: Always check available skills before implementing features. Skills contain project-specific patterns, component libraries, and implementation guidelines that prevent mistakes.
-
-## Project Creation
-
-When creating projects, descriptions matter — they become part of the project context:
+### Direct read/write
 
 ```bash
-cm64 create "My App" \
-  --domain myapp \
-  --description "E-commerce platform with product catalog, cart, and checkout" \
-  --template existing-app.cm64.site
+cm64 read component/Header
+cm64 write component/Header --content '...'
+cm64 edit page/home --old '"title": "Old"' --new '"title": "New"'
 ```
 
-- `--domain` sets a custom subdomain (e.g., myapp.cm64.site)
-- `--template` clones all files from an existing project
-- `--description` is stored and used in AI context — be specific!
-- An admin user is automatically created in the app database
+## All Commands
 
-## File Classes (SINGULAR)
-
-Always use singular: `page`, `component`, `function`, `css`, `setting`, `database`, `asset`
-
-```bash
-cm64 read component/Header    # correct
-cm64 read components/Header   # auto-corrected to singular, but avoid
-```
-
-## Quick Reference
-
+### Setup
 | Command | Description |
 |---------|-------------|
-| `cm64 register` | Create account |
-| `cm64 login` | Login with email + code |
-| `cm64 projects` | List projects |
-| `cm64 use <id\|domain>` | Set active project |
-| `cm64 create <name>` | Create project |
-| `cm64 pull` | Pull all files locally |
-| `cm64 push` | Push local changes |
-| `cm64 sync` | Bidirectional sync |
-| `cm64 ls` | List files |
-| `cm64 read <path>` | Read file |
-| `cm64 write <path>` | Write file |
-| `cm64 edit <path>` | Find-replace edit |
-| `cm64 search <pattern>` | Grep across files |
-| `cm64 load` | System prompt |
-| `cm64 skills` | List skills |
-| `cm64 learn <name>` | Read skill docs |
-| `cm64 snapshot <name>` | Create snapshot |
-| `cm64 deploy latest` | Deploy to production |
-| `cm64 status` | Quick context check |
+| `cm64 register` | Create account (email + challenge) |
+| `cm64 login` | Login with email + code, or `cm64 login <token>` |
+| `cm64 projects [--query x]` | List projects (searches name and domain) |
+| `cm64 use <id\|domain>` | Set active project (persists to config) |
+| `cm64 create <name>` | Create project (`--domain`, `--template`, `--description`) |
+| `cm64 status` | One-liner: name, domain, snapshot, file count |
+| `cm64 info` | Full project metadata |
+
+### Files
+| Command | Description |
+|---------|-------------|
+| `cm64 ls [--class component]` | List files, optionally by class |
+| `cm64 read <class/name>` | Read file (caches hash for conflict detection) |
+| `cm64 write <class/name>` | Write file (`--content`, `-f file`, or stdin) |
+| `cm64 write-many` | Bulk write (JSON array from stdin) |
+| `cm64 edit <class/name>` | Find-replace (`--old "x" --new "y"`) |
+| `cm64 diff <class/name>` | Compare cached vs remote |
+| `cm64 delete <class/name>` | Delete a file |
+| `cm64 rename <from> <to>` | Rename/move file |
+
+### Git-like Sync
+| Command | Description |
+|---------|-------------|
+| `cm64 pull` | Pull all project files into `./domain/` folder |
+| `cm64 push` | Push local changes to server |
+| `cm64 sync` | Bidirectional sync (pull remote + push local) |
+| `cm64 pull component/Hero` | Pull single file |
+| `cm64 push component/Hero.jsx` | Push single file |
+| `cm64 pull ./component/` | Pull all components |
+| `cm64 push ./` | Push all local files |
+
+### Search
+| Command | Description |
+|---------|-------------|
+| `cm64 search <pattern>` | Grep across files (`--class`, `--limit`) |
+| `cm64 glob <pattern>` | Glob file paths |
+
+### Assets
+| Command | Description |
+|---------|-------------|
+| `cm64 upload <name> -f <file>` | Upload asset (`--folder`, `--mime`) |
+| `cm64 assets [--folder x]` | List assets with URLs |
+
+### Deploy
+| Command | Description |
+|---------|-------------|
+| `cm64 snapshot <name>` | Create named snapshot (`--description`) |
+| `cm64 deploy <id\|latest>` | Pin snapshot to production (`--domain`) |
+| `cm64 history <class/name>` | File version history |
+| `cm64 restore <class/name>` | Restore version (`--version <id>`) |
+
+### Project Context
+| Command | Description |
+|---------|-------------|
+| `cm64 load` | System prompt (interpolated). `--raw` for uninterpolated |
+| `cm64 skills` | List skills. `cm64 skills <name>` for details |
+| `cm64 learn [skill]` | Read full skill documentation |
+| `cm64 buildme` | Read BUILDME.md. `--set "content"` to update, `--append` |
+
+### Data
+| Command | Description |
+|---------|-------------|
+| `cm64 users [--search x]` | App end-users (`--role`, `--status`, `--page`, `--limit`) |
+| `cm64 analytics [--days 7]` | Analytics (`--event`) |
+| `cm64 debug [--pattern x]` | Logs (`--level`, `--limit`, `--since`) |
+
+## File Classes
+
+| Class | Extension | Description |
+|-------|-----------|-------------|
+| `page` | .json | Page definitions (layout, components, data binding) |
+| `component` | .jsx | React components |
+| `function` | .js | Server-side API endpoints and logic |
+| `setting` | .json | Configuration files |
+| `database` | .json | MongoDB schema definitions |
+| `asset` | various | Static files (images, fonts, CSS, etc.) |
+
+**Note**: All static files (CSS, images, fonts) go through `asset`. Use `cm64 upload` for these.
 
 ## Conflict Detection
 
-The CLI tracks file hashes automatically:
-- `cm64 read` caches the hash
-- `cm64 write` / `cm64 push` sends the cached hash for conflict checking
-- If someone else changed the file, you get a conflict error
-- Use `--force` / `-F` to skip conflict detection
-- Use `cm64 diff <path>` to see what changed
+1. `cm64 read` caches the file hash to `~/.cm64/cache/<project_id>/`
+2. `cm64 write` / `cm64 push` auto-sends cached hash as `base_hash`
+3. Server rejects if file changed remotely since last read
+4. `cm64 diff <path>` to see what changed
+5. `--force` / `-F` to skip conflict detection
+
+## Project Creation
+
+```bash
+cm64 create "My App" --domain myapp --description "E-commerce with cart and checkout" --template existing.cm64.site
+```
+
+- `--domain` custom subdomain (myapp.cm64.site)
+- `--template` clones files from existing project
+- `--description` stored in project context — be specific, AI uses it
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `CM64_TOKEN` | Override auth token |
+| `CM64_ENDPOINT` | Override API endpoint |
+| `CM64_PROJECT` | Override active project ID |
+
+Config: `~/.cm64/config.json`
