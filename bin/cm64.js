@@ -3,7 +3,7 @@
 // Each command is an independent HTTP call. No sessions.
 // Usage: cm64 <command> [args] [--json]
 
-import { loadConfig, saveConfig, getToken, getEndpoint, getProjectId, getProjectDomain, CONFIG_FILE } from '../lib/config.js';
+import { loadConfig, saveConfig, getToken, getEndpoint, getProjectId, getProjectName, getProjectDomain, CONFIG_FILE } from '../lib/config.js';
 import { callCLI } from '../lib/api.js';
 import { cacheFile, getCachedFile, getCachedHash } from '../lib/cache.js';
 import { createInterface } from 'readline';
@@ -70,7 +70,7 @@ function outputResult(result) {
 
 // ── Path Validation ─────────────────────────────────────────
 
-const VALID_CLASSES = ['page', 'component', 'function', 'setting', 'database', 'asset'];
+const VALID_CLASSES = ['page', 'component', 'function', 'setting', 'database', 'asset', 'css'];
 
 function validatePath(path) {
   if (!path || !path.includes('/')) return; // let server handle missing/malformed paths
@@ -84,6 +84,23 @@ function validatePath(path) {
   die(`Invalid class "${cls}".\n  Valid classes: ${VALID_CLASSES.join(', ')}`);
 }
 
+// Enforce css restrictions for write/edit/push: only css/global.css is allowed.
+// Accepts "css/global" or "css/global.css"; rejects any other name or extension.
+function enforceCssWrite(path) {
+  if (!path || !path.includes('/')) return;
+  const [cls, ...rest] = path.split('/');
+  if (cls !== 'css') return;
+  const name = rest.join('/');
+  const ext = extname(name);
+  const bare = ext ? name.slice(0, -ext.length) : name;
+  if (ext && ext !== '.css') {
+    die('CSS files use the .css extension. CM64 reads exactly css/global.css.');
+  }
+  if (bare !== 'global') {
+    die('Only css/global.css is supported. CM64 reads exactly one CSS file per site. Put all your custom CSS in css/global.css.');
+  }
+}
+
 // ── Path Mapping (local ↔ server) ───────────────────────────
 
 // Map folder name → file class (accepts plural for backward compat)
@@ -94,12 +111,14 @@ const FOLDER_TO_CLASS = {
   'settings': 'setting', 'setting': 'setting',
   'databases': 'database', 'database': 'database',
   'assets': 'asset', 'asset': 'asset',
+  'css': 'css',
 };
 
 // Map file class → default extension
 const CLASS_EXT = {
   page: '.json', component: '.jsx', function: '.js',
   setting: '.json', database: '.json', asset: '',
+  css: '.css',
 };
 
 // Map extension → likely class (when ambiguous, prefer component)
@@ -543,6 +562,7 @@ const HANDLERS = {
     const path = subArgs[0];
     if (!path) die('Usage: cm64 write <class/name> --content "..." | -f file.json | stdin');
     validatePath(path);
+    enforceCssWrite(path);
 
     let content = getFlag(['--content', '-c'], true);
     const localFile = getFlag(['-f', '--file'], true);
@@ -647,6 +667,13 @@ const HANDLERS = {
   async push() {
     let target = subArgs[0];
 
+    // Show project context prominently
+    const _pushName = getProjectName();
+    const _pushId = getProjectId();
+    if (_pushName || _pushId) {
+      info(`Project: ${_pushName || 'unknown'} (${_pushId || 'no id'})`);
+    }
+
     // No argument: auto-detect domain folder or current dir
     if (!target) {
       const domain = getProjectDomain();
@@ -681,7 +708,7 @@ const HANDLERS = {
         files = scanLocalFiles(target);
       }
 
-      if (files.length === 0) die(`No pushable files found in ${target}\n  Expected folders: component/, page/, function/, css/, setting/, database/`);
+      if (files.length === 0) die(`No pushable files found in ${target}\n  Expected folders: component/, page/, function/, setting/, database/, css/`);
 
       info(`Pushing ${files.length} file(s)...`);
 
@@ -689,6 +716,7 @@ const HANDLERS = {
       for (const f of files) {
         const content = readFileSync(f.localFile, 'utf-8');
         const serverPath = `${f.class}/${f.name}`;
+        enforceCssWrite(serverPath);
         const entry = { path: serverPath, content };
 
         // Auto-attach cached hash
@@ -734,6 +762,7 @@ const HANDLERS = {
     if (!parsed) die(`Can't detect file class from path: ${target}\n  Expected format: <class>/<name>.<ext>  (e.g., component/Hero.jsx, setting/theme.json)`);
 
     const serverPath = `${parsed.class}/${parsed.name}`;
+    enforceCssWrite(serverPath);
     const content = readFileSync(target, 'utf-8');
 
     let baseHash = null;
@@ -763,6 +792,13 @@ const HANDLERS = {
   // ─── pull ──────────────────────────────────────────────────
   async pull() {
     let target = subArgs[0];
+
+    // Show project context prominently
+    const _pullName = getProjectName();
+    const _pullId = getProjectId();
+    if (_pullName || _pullId) {
+      info(`Project: ${_pullName || 'unknown'} (${_pullId || 'no id'})`);
+    }
 
     // No argument: auto-detect — pull all files into domain folder or ./
     if (!target) {
@@ -893,6 +929,13 @@ const HANDLERS = {
 
   // ─── sync ─────────────────────────────────────────────────
   async sync() {
+    // Show project context prominently
+    const _syncName = getProjectName();
+    const _syncId = getProjectId();
+    if (_syncName || _syncId) {
+      info(`Project: ${_syncName || 'unknown'} (${_syncId || 'no id'})`);
+    }
+
     let target = subArgs[0];
     if (!target) {
       const domain = getProjectDomain();
@@ -1034,6 +1077,7 @@ const HANDLERS = {
     const path = subArgs[0];
     if (!path) die('Usage: cm64 edit <class/name> --old "text" --new "text"');
     validatePath(path);
+    enforceCssWrite(path);
 
     const oldText = getFlag(['--old'], true);
     const newText = getFlag(['--new'], true);
