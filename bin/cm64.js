@@ -8,7 +8,7 @@ import { callCLI } from '../lib/api.js';
 import { cacheFile, getCachedFile, getCachedHash, removeCachedFile } from '../lib/cache.js';
 import { createInterface } from 'readline';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'fs';
-import { join, dirname, basename, extname } from 'path';
+import { join, dirname, basename, extname, resolve } from 'path';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
@@ -750,7 +750,8 @@ const HANDLERS = {
 
   // ─── push ──────────────────────────────────────────────────
   async push() {
-    let target = subArgs[0];
+    // Skip flag tokens so e.g. `cm64 push --check` isn't treated as a path.
+    let target = subArgs.find(a => !a.startsWith('-'));
 
     // Show project context prominently
     const _pushName = getProjectName();
@@ -1021,13 +1022,21 @@ const HANDLERS = {
       });
     }
 
+    // Surface a clear next-step on conflict. Server already includes the hint
+    // in newer versions, but older deployments may not — make sure the CLI
+    // always points at --force / cm64 diff so users aren't stuck.
+    if (!result.ok && result.data?.conflict) {
+      const hinted = /--force|cm64 diff/i.test(result.error || '');
+      if (!hinted) {
+        result.error = `${result.error}\n  Run \`cm64 diff ${serverPath}\` to see remote changes, or re-run with --force to overwrite.`;
+      }
+    }
+
     outputResult(result);
   },
 
   // ─── pull ──────────────────────────────────────────────────
   async pull() {
-    let target = subArgs[0];
-
     // Show project context prominently
     const _pullName = getProjectName();
     const _pullId = getProjectId();
@@ -1035,14 +1044,18 @@ const HANDLERS = {
       info(`Project: ${_pullName || 'unknown'} (${_pullId || 'no id'})`);
     }
 
-    // No argument: auto-detect — pull all files into domain folder or ./
+    // Parse flags first so they can't leak into the positional target.
+    // (subArgs was snapshotted at module load; getFlag splices argv but not
+    // subArgs, so reading subArgs[0] directly would treat --check as a path.)
+    const outDir = getFlag(['-o', '--out'], true);
+    const checkOnly = !!getFlag(['--check', '--dry-run']);
+
+    let target = subArgs.find(a => !a.startsWith('-'));
+
+    // No positional: auto-detect — pull all files into domain folder or ./
     if (!target) {
       target = './';
     }
-
-    const outDir = getFlag(['-o', '--out'], true);
-
-    const checkOnly = !!getFlag(['--check', '--dry-run']);
 
     // Pull all files (cm64 pull ./ or cm64 pull . or cm64 pull with no args)
     if (target === './' || target === '.') {
@@ -1050,8 +1063,18 @@ const HANDLERS = {
       let baseDir = outDir || '.';
       const domain = getProjectDomain();
       if (!outDir && domain) {
-        baseDir = `./${domain}`;
-        info(`Pulling into ./${domain}/`);
+        // Don't nest into ./<domain>/ if we're already in that folder, or if
+        // a workspace file already pins cwd to this project — would create
+        // bluemoon.cm64.studio/bluemoon.cm64.studio/.
+        const cwdName = basename(resolve('.'));
+        const alreadyInDomainDir = cwdName === domain;
+        const cwdWorkspace = existsSync(WORKSPACE_FILE_NAME);
+        if (alreadyInDomainDir || cwdWorkspace) {
+          baseDir = '.';
+        } else {
+          baseDir = `./${domain}`;
+          info(`Pulling into ./${domain}/`);
+        }
       }
 
       info(checkOnly ? 'Checking remote vs local...' : 'Pulling all files...');
@@ -1211,7 +1234,7 @@ const HANDLERS = {
         const readResult = await callCLI('read_file', { path: serverPath });
         if (!readResult.ok || !readResult.data) continue;
 
-        const localFile = toLocalPath(folderClass, f.name, outDir);
+        const localFile = toLocalPath(folderClass, f.name, outDir || '.');
         const dir = dirname(localFile);
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
         writeFileSync(localFile, readResult.data.content || '');
@@ -1249,7 +1272,7 @@ const HANDLERS = {
 
     const [cls, ...nameParts] = serverPath.split('/');
     const name = nameParts.join('/');
-    const localFile = toLocalPath(cls, name, outDir);
+    const localFile = toLocalPath(cls, name, outDir || '.');
     const dir = dirname(localFile);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(localFile, readResult.data.content || '');
@@ -1832,6 +1855,11 @@ WORKFLOW (the local-first loop)
   cm64 doctor                     Health checks (missing titles, OG, snapshots, bad JSON)
   cm64 invalidate-cache [-t all]  Flush framework caches (target: all|components|site)
 
+EDIT (remote-affecting; safe to use without a pull)
+  cm64 delete <class/name>        Delete a file on the server (alias: rm)
+  cm64 rename <from> <to>         Rename/move a file on the server (alias: mv)
+  cm64 diff <class/name>          Show remote vs locally-cached content (no pull needed)
+
 CONTEXT
   cm64 learn                      Print system prompt + available skills index
   cm64 learn <skill> [<skill>...] Read skill docs
@@ -1881,9 +1909,9 @@ PROJECT RESOLUTION (first match wins)
   Run 'cm64 status' to see which source is active.
 
 ADVANCED
-  Remote-only verbs (read/write/edit/ls/search/glob/diff/delete/rename/write-many)
-  are hidden by default — they overlap with your local editor/grep/etc. once you
-  have a pull. See: cm64 help --advanced
+  Remote-only verbs (read/write/edit/ls/search/glob/write-many) are hidden by
+  default — they overlap with your local editor/grep/etc. once you have a
+  pull. See: cm64 help --advanced
 
 Config: ~/.cm64/config.json
 Docs: https://docs.cm64.io/cli`);
@@ -1902,9 +1930,8 @@ REMOTE FILES (escape hatches; prefer pull → edit locally → push)
   cm64 write <class/name>         Write file (--content, -f, or stdin)
   cm64 write-many                 Bulk write (JSON from stdin)
   cm64 edit <class/name>          Edit (--old "x" --new "y")
-  cm64 diff <class/name>          Compare locally cached version vs remote
-  cm64 delete <class/name>        Delete file
-  cm64 rename <from> <to>         Rename/move file
+
+  (delete, rename, diff have been promoted to main help — see 'cm64 help')
 
 REMOTE SEARCH (escape hatches; prefer ripgrep on a pulled project)
   cm64 search <pattern>           Grep across project files
