@@ -85,6 +85,12 @@ See [SKILL.md](./SKILL.md) for comprehensive AI model documentation.
 - `cm64 users` — App end-users
 - `cm64 analytics` — Product analytics
 - `cm64 debug [--function x] [--source function|component]` — Server-side function logs
+- `cm64 database [list]` — List the active project's declared databases (read-only)
+- `cm64 database query <name> [--search x] [--filter k=v] [--sort f] [--order asc|desc] [--page n] [--limit n]` — Paginated read of a database
+- `cm64 database get <name> <id>` — Fetch one document by id
+- `cm64 database count <name> [--filter k=v]` — Count documents
+
+The `database` commands are **read-only** and **project-scoped**: a database name is resolved against the active project's own config, and local (`jason`) collections are tenant-prefixed server-side — you can only ever read your own project's data, never another project's.
 
 ### Setup (mostly first-time)
 - `cm64 register` — Create account

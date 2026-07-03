@@ -121,6 +121,12 @@ cm64 edit page/home --old '"title": "Old"' --new '"title": "New"'
 | `cm64 users [--search x]` | App end-users (`--role`, `--status`, `--page`, `--limit`) |
 | `cm64 analytics [--days 7]` | Analytics (`--event`) |
 | `cm64 debug [--pattern x]` | Logs (`--level`, `--limit`, `--since`) |
+| `cm64 database [list]` | List the project's declared databases (read-only) |
+| `cm64 database query <name>` | Read docs (`--search`, `--filter k=v`, `--sort`, `--order`, `--page`, `--limit`) |
+| `cm64 database get <name> <id>` | Fetch one document by id |
+| `cm64 database count <name>` | Count docs (`--filter k=v`) |
+
+**Database access is read-only and project-scoped.** A `<name>` resolves only against the active project's own database config; local (`jason`) collections are tenant-prefixed server-side. You cannot reach another project's data — there is no raw-collection or connection-string override.
 
 ## File Classes
 

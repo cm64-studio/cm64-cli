@@ -34,6 +34,31 @@ function getFlag(names, hasValue = false) {
   return hasValue ? null : false;
 }
 
+// Collect every occurrence of a repeatable value flag (e.g. --filter k=v --filter j=w).
+// Splices each match out of argv so it doesn't interfere with later parsing.
+function getFlagAll(names) {
+  const list = Array.isArray(names) ? names : [names];
+  const values = [];
+  let idx;
+  while ((idx = argv.findIndex(a => list.includes(a))) !== -1) {
+    const val = argv[idx + 1];
+    argv.splice(idx, 2);
+    if (val !== undefined) values.push(val);
+  }
+  return values;
+}
+
+// Parse repeated --filter k=v flags into an object { k: v }.
+function parseFilters(names) {
+  const out = {};
+  for (const pair of getFlagAll(names)) {
+    const eq = pair.indexOf('=');
+    if (eq === -1) continue; // ignore malformed
+    out[pair.slice(0, eq)] = pair.slice(eq + 1);
+  }
+  return out;
+}
+
 const jsonOutput = getFlag(['--json']);
 const forceFlag = getFlag(['--force', '-F']);
 const command = argv[0];
@@ -1767,6 +1792,68 @@ const HANDLERS = {
     outputResult(result);
   },
 
+  // ─── database ──────────────────────────────────────────────
+  // Read-only access to the ACTIVE project's own databases. The server
+  // resolves the database name against this project's config and applies
+  // tenant isolation — you can only ever reach your own project's data.
+  async database() {
+    const sub = (subArgs[0] || 'list').toLowerCase();
+
+    switch (sub) {
+      case 'list':
+      case 'ls': {
+        const result = await callCLI('database_list', {});
+        outputResult(result);
+        return;
+      }
+
+      case 'query':
+      case 'find': {
+        const name = subArgs[1];
+        if (!name) die('Usage: cm64 database query <name> [--search x] [--filter k=v] [--sort f] [--order asc|desc] [--page n] [--limit n]');
+        const search = getFlag(['--search', '-s'], true);
+        const sort = getFlag(['--sort'], true);
+        const order = getFlag(['--order'], true);
+        const page = getFlag(['--page', '-p'], true);
+        const limit = getFlag(['--limit', '-n'], true);
+        const filter = parseFilters(['--filter']);
+
+        const result = await callCLI('database_query', {
+          name, search, sort, order,
+          filter: Object.keys(filter).length ? filter : undefined,
+          page: page ? parseInt(page) : undefined,
+          limit: limit ? parseInt(limit) : undefined,
+        });
+        outputResult(result);
+        return;
+      }
+
+      case 'get': {
+        const name = subArgs[1];
+        const id = subArgs[2];
+        if (!name || !id) die('Usage: cm64 database get <name> <id>');
+        const result = await callCLI('database_get', { name, id });
+        outputResult(result);
+        return;
+      }
+
+      case 'count': {
+        const name = subArgs[1];
+        if (!name) die('Usage: cm64 database count <name> [--filter k=v]');
+        const filter = parseFilters(['--filter']);
+        const result = await callCLI('database_count', {
+          name,
+          filter: Object.keys(filter).length ? filter : undefined,
+        });
+        outputResult(result);
+        return;
+      }
+
+      default:
+        die(`Unknown database subcommand: ${sub}\n  Usage: cm64 database <list|query|get|count>`);
+    }
+  },
+
   // ─── upload (asset) ────────────────────────────────────────
   async upload() {
     const name = subArgs[0];
@@ -1882,6 +1969,10 @@ DATA
   cm64 users [--search x]         App end-users
   cm64 analytics [--days 7]       Analytics
   cm64 debug [--pattern x]        Server-side function logs
+  cm64 database                   List this project's databases (read-only)
+  cm64 database query <name>      Read docs (--search, --filter k=v, --page, --limit)
+  cm64 database get <name> <id>   Fetch one document by id
+  cm64 database count <name>      Count documents (--filter k=v)
 
 SETUP
   cm64 register                   Create account
@@ -2021,6 +2112,7 @@ const SUBCOMMAND_HELP = {
   users:      'Usage: cm64 users [--search <x>] [--role <r>] [--status <s>] [--page <n>] [--limit <n>]\n  List app end-users.',
   analytics:  'Usage: cm64 analytics [--days <n>] [--event <e>]\n  View analytics data.',
   debug:      'Usage: cm64 debug [--pattern <p>] [--level <l>] [--function <name>] [--source function|component] [--limit <n>] [--since <date>]\n  View server-side function execution logs (app.log, errors, recommendations).',
+  database:   'Usage: cm64 database <list|query|get|count>\n  Read-only access to the ACTIVE project\'s own databases. Isolation is enforced server-side: a database name resolves against this project\'s config only, and local (jason) collections are tenant-prefixed — there is no way to reach another project\'s data.\n\n  cm64 database [list]                       List declared databases (name, type, collection).\n  cm64 database query <name> [flags]         Paginated read. Flags:\n      --search <x>        cross-field regex search\n      --filter <k=v>      exact-match filter (repeatable)\n      --sort <field>      sort field (default _id)\n      --order asc|desc    sort direction (default asc)\n      --page <n>          page number (default 1)\n      --limit <n>         page size (default 25, max 100)\n  cm64 database get <name> <id>              Fetch one document by _id (or top-level id).\n  cm64 database count <name> [--filter k=v]  Count documents.',
 };
 
 // ── Main ─────────────────────────────────────────────────────
