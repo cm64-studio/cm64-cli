@@ -1689,15 +1689,44 @@ const HANDLERS = {
     }
   },
 
-  // ─── load (system prompt) — deprecated alias for `cm64 learn` ───
+  // ─── load (system prompt + available skills index) ───────────
+  // Full context bootstrap: the project system prompt PLUS the index of
+  // skills the user can `cm64 learn <skill>`. Use this to get oriented.
   async load() {
-    if (!jsonOutput) {
-      // Deprecation notice on stderr so it doesn't pollute --json output.
-      process.stderr.write('Note: `cm64 load` is now `cm64 learn` (no args). Both still work.\n');
-    }
     const raw = getFlag(['--raw', '-r']);
-    const result = await callCLI('get_system_prompt', { raw: raw || undefined });
-    outputResult(result);
+    const promptResult = await callCLI('get_system_prompt', { raw: raw || undefined });
+    const skillsResult = await callCLI('learn', {});
+
+    if (jsonOutput) {
+      // Structured: callers parse two named fields.
+      outputResult({
+        ok: promptResult.ok && skillsResult.ok,
+        data: {
+          system_prompt: promptResult.data ?? promptResult.text ?? null,
+          skills: skillsResult.data ?? null,
+          skills_text: skillsResult.text ?? null
+        },
+        error: promptResult.error || skillsResult.error || undefined
+      });
+      return;
+    }
+
+    // Human-readable: stitch the two outputs together.
+    const parts = [];
+    if (promptResult.ok && (promptResult.text || promptResult.data)) {
+      parts.push(promptResult.text || JSON.stringify(promptResult.data, null, 2));
+    } else if (!promptResult.ok) {
+      parts.push(`(system prompt unavailable: ${promptResult.error})`);
+    }
+    parts.push('');
+    parts.push('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    parts.push('');
+    if (skillsResult.ok) {
+      parts.push(skillsResult.text || '');
+    } else {
+      parts.push(`(skills index unavailable: ${skillsResult.error})`);
+    }
+    out(parts.join('\n'));
   },
 
   // ─── skills ─────────────────────────────────────────────────
@@ -1708,51 +1737,18 @@ const HANDLERS = {
   },
 
   // ─── learn ─────────────────────────────────────────────────
-  // No args: returns the system prompt + the available-skills index (the old
-  // `cm64 load` + `cm64 skills` rolled into one). With one or more skill
-  // names: returns those skills' content (use --offset/--limit to chunk).
+  // No args: returns the available-skills index (what you can learn). With one
+  // or more skill names: returns those skills' content (use --offset/--limit to
+  // chunk). For the full system prompt + skills index, use `cm64 load`.
   async learn() {
     const skills = subArgs.length > 0 ? subArgs : undefined;
     const offset = getFlag(['--offset'], true);
     const limit = getFlag(['--limit', '-n'], true);
-    const raw = getFlag(['--raw', '-r']);
 
     if (!skills) {
-      // No-arg learn: combine system prompt + skills index. Two calls so the
-      // user gets both context surfaces in one shot.
-      const promptResult = await callCLI('get_system_prompt', { raw: raw || undefined });
-      const skillsResult = await callCLI('learn', {});
-
-      if (jsonOutput) {
-        // Structured: callers parse two named fields.
-        outputResult({
-          ok: promptResult.ok && skillsResult.ok,
-          data: {
-            system_prompt: promptResult.data ?? promptResult.text ?? null,
-            skills: skillsResult.data ?? null,
-            skills_text: skillsResult.text ?? null
-          },
-          error: promptResult.error || skillsResult.error || undefined
-        });
-        return;
-      }
-
-      // Human-readable: stitch the two outputs together.
-      const parts = [];
-      if (promptResult.ok && (promptResult.text || promptResult.data)) {
-        parts.push(promptResult.text || JSON.stringify(promptResult.data, null, 2));
-      } else if (!promptResult.ok) {
-        parts.push(`(system prompt unavailable: ${promptResult.error})`);
-      }
-      parts.push('');
-      parts.push('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      parts.push('');
-      if (skillsResult.ok) {
-        parts.push(skillsResult.text || '');
-      } else {
-        parts.push(`(skills index unavailable: ${skillsResult.error})`);
-      }
-      out(parts.join('\n'));
+      // No-arg learn: just the available-skills index.
+      const result = await callCLI('learn', {});
+      outputResult(result);
       return;
     }
 
@@ -1948,7 +1944,8 @@ EDIT (remote-affecting; safe to use without a pull)
   cm64 diff <class/name>          Show remote vs locally-cached content (no pull needed)
 
 CONTEXT
-  cm64 learn                      Print system prompt + available skills index
+  cm64 load                       Print system prompt + available skills index
+  cm64 learn                      List available skills (what you can learn)
   cm64 learn <skill> [<skill>...] Read skill docs
   cm64 skills                     List all skills with sizes
   cm64 buildme                    Read BUILDME.md
@@ -2028,9 +2025,6 @@ REMOTE SEARCH (escape hatches; prefer ripgrep on a pulled project)
   cm64 search <pattern>           Grep across project files
   cm64 glob <pattern>             Glob file paths
 
-DEPRECATED
-  cm64 load [--raw]               Use \`cm64 learn\` instead.
-
 Run \`cm64 <command> --help\` for per-command usage.
 `);
   }
@@ -2106,9 +2100,9 @@ const SUBCOMMAND_HELP = {
   upload:     'Usage: cm64 upload <name> -f <file> [--folder <path>] [--mime <type>]\n  Upload an asset (image, video, etc.).',
   assets:     'Usage: cm64 assets [--folder <path>]\n  List uploaded assets with S3 URLs.',
   buildme:    'Usage: cm64 buildme [--set "content"] [--append]\n  Read or update BUILDME.md.',
-  load:       'Usage: cm64 load [--raw]\n  Deprecated alias for `cm64 learn` (no args). Returns the system prompt.',
+  load:       'Usage: cm64 load [--raw]\n  Prints the project system prompt + the available-skills index (full context bootstrap).',
   skills:     'Usage: cm64 skills [<name>]\n  List skills or show details for a specific skill.',
-  learn:      'Usage: cm64 learn [<skill> ...] [--raw] [--offset <n>] [--limit <n>]\n  No args: prints the project system prompt + available skills index (the old `cm64 load` + `cm64 skills` rolled into one).\n  With skill names: prints those skills\' contents (use --offset/--limit to chunk long ones).',
+  learn:      'Usage: cm64 learn [<skill> ...] [--offset <n>] [--limit <n>]\n  No args: lists the available skills (what you can learn). For the system prompt too, use `cm64 load`.\n  With skill names: prints those skills\' contents (use --offset/--limit to chunk long ones).',
   users:      'Usage: cm64 users [--search <x>] [--role <r>] [--status <s>] [--page <n>] [--limit <n>]\n  List app end-users.',
   analytics:  'Usage: cm64 analytics [--days <n>] [--event <e>]\n  View analytics data.',
   debug:      'Usage: cm64 debug [--pattern <p>] [--level <l>] [--function <name>] [--source function|component] [--limit <n>] [--since <date>]\n  View server-side function execution logs (app.log, errors, recommendations).',
