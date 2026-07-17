@@ -82,7 +82,10 @@ See [SKILL.md](./SKILL.md) for comprehensive AI model documentation.
 - `cm64 restore <class/name> --version <id>` — Roll back
 
 ### Data
-- `cm64 users` — App end-users
+- `cm64 users` — List app end-users (`--search`/`--role`/`--status` filters)
+- `cm64 user add <email> [--name "..."] [--role admin|user|editor] [--status active]` — Add an app user and assign role privileges (repeat `--role` for multiple roles). Login is OTP-based, so no password is set.
+- `cm64 user set <email> [--role r] [--name "..."] [--status active|inactive]` — Update a user (only the flags you pass change)
+- `cm64 user rm <email>` — Delete an app user
 - `cm64 analytics` — Product analytics
 - `cm64 debug [--function x] [--source function|component]` — Server-side function logs
 - `cm64 database [list]` — List the active project's declared databases (read-only)

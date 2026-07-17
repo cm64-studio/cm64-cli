@@ -1776,6 +1776,80 @@ const HANDLERS = {
     outputResult(result);
   },
 
+  // ─── user (add / set / rm / list) ──────────────────────────
+  // Manage app end-users of the active project: create them and assign role
+  // privileges. Login is OTP-based, so no password is set here — new users
+  // sign in via one-time code. Roles are free-form; roles[] gates access.
+  async user() {
+    const KNOWN_ROLES = ['admin', 'user', 'editor'];
+    const warnRole = (r) => {
+      if (r && !KNOWN_ROLES.includes(r)) {
+        info(`Note: "${r}" isn't a common role (${KNOWN_ROLES.join('/')}). Using it anyway.`);
+      }
+    };
+
+    const sub = (subArgs[0] || '').toLowerCase();
+
+    // `cm64 user` / `cm64 user list` → delegate to the users list command.
+    if (!sub || sub === 'list' || sub === 'ls') {
+      // Drop the leading "list"/"ls" token, then reuse users().
+      if (sub === 'list' || sub === 'ls') subArgs.shift();
+      return this.users();
+    }
+
+    if (sub === 'add' || sub === 'create') {
+      const email = subArgs[1];
+      if (!email) die('Usage: cm64 user add <email> [--name "..."] [--role admin|user|editor] [--status active]');
+      const name = getFlag(['--name'], true);
+      const roles = getFlagAll(['--role', '--roles']); // repeatable → roles[]
+      const status = getFlag(['--status'], true);
+      roles.forEach(warnRole);
+
+      const result = await callCLI('create_user', {
+        email,
+        name: name || undefined,
+        role: roles[0] || undefined,
+        roles: roles.length ? roles : undefined,
+        status: status || undefined
+      });
+      outputResult(result);
+      return;
+    }
+
+    if (sub === 'set' || sub === 'update' || sub === 'role') {
+      const email = subArgs[1];
+      if (!email) die('Usage: cm64 user set <email> [--role admin|user|editor] [--name "..."] [--status active|inactive]');
+      const name = getFlag(['--name'], true);
+      const roles = getFlagAll(['--role', '--roles']);
+      const status = getFlag(['--status'], true);
+      roles.forEach(warnRole);
+
+      if (!roles.length && name === null && !status) {
+        die('Nothing to change. Provide at least one of: --role, --name, --status.');
+      }
+
+      const result = await callCLI('update_user', {
+        email,
+        role: roles[0] || undefined,
+        roles: roles.length ? roles : undefined,
+        name: name !== null ? name : undefined,
+        status: status || undefined
+      });
+      outputResult(result);
+      return;
+    }
+
+    if (sub === 'rm' || sub === 'remove' || sub === 'delete' || sub === 'del') {
+      const email = subArgs[1];
+      if (!email) die('Usage: cm64 user rm <email>');
+      const result = await callCLI('delete_user', { email });
+      outputResult(result);
+      return;
+    }
+
+    die(`Unknown subcommand: user ${sub}\n  Try: cm64 user add|set|rm|list  (see 'cm64 user --help')`);
+  },
+
   // ─── analytics ─────────────────────────────────────────────
   async analytics() {
     const days = getFlag(['--days', '-d'], true);
@@ -1963,7 +2037,10 @@ DEPLOY
   cm64 restore <class/name>       Restore to version (--version <id>)
 
 DATA
-  cm64 users [--search x]         App end-users
+  cm64 users [--search x]         List app end-users
+  cm64 user add <email>           Add an app user (--name, --role, --status)
+  cm64 user set <email> --role r  Change a user's role/name/status
+  cm64 user rm <email>            Remove an app user
   cm64 analytics [--days 7]       Analytics
   cm64 debug [--pattern x]        Server-side function logs
   cm64 database                   List this project's databases (read-only)
@@ -2104,6 +2181,7 @@ const SUBCOMMAND_HELP = {
   skills:     'Usage: cm64 skills [<name>]\n  List skills or show details for a specific skill.',
   learn:      'Usage: cm64 learn [<skill> ...] [--offset <n>] [--limit <n>]\n  No args: lists the available skills (what you can learn). For the system prompt too, use `cm64 load`.\n  With skill names: prints those skills\' contents (use --offset/--limit to chunk long ones).',
   users:      'Usage: cm64 users [--search <x>] [--role <r>] [--status <s>] [--page <n>] [--limit <n>]\n  List app end-users.',
+  user:       'Usage: cm64 user <add|set|rm|list> ...\n  Manage app end-users of the active project (create + assign role privileges).\n  Login is OTP-based, so no password is set — new users sign in via one-time code.\n\n  cm64 user add <email> [--name "..."] [--role <r>] [--status active]\n      Create a user. --role is repeatable for multiple roles (--role admin --role editor).\n      Default role is "user", default status "active".\n  cm64 user set <email> [--role <r>] [--name "..."] [--status active|inactive]\n      Update an existing user (only the flags you pass change).\n      Changing --role rewrites the roles[] array (the field that gates access).\n  cm64 user rm <email>                       Delete a user.\n  cm64 user list [--search <x>] [--role <r>]  Alias for `cm64 users`.\n\n  Roles are free-form; common values are admin / user / editor.',
   analytics:  'Usage: cm64 analytics [--days <n>] [--event <e>]\n  View analytics data.',
   debug:      'Usage: cm64 debug [--pattern <p>] [--level <l>] [--function <name>] [--source function|component] [--limit <n>] [--since <date>]\n  View server-side function execution logs (app.log, errors, recommendations).',
   database:   'Usage: cm64 database <list|query|get|count>\n  Read-only access to the ACTIVE project\'s own databases. Isolation is enforced server-side: a database name resolves against this project\'s config only, and local (jason) collections are tenant-prefixed — there is no way to reach another project\'s data.\n\n  cm64 database [list]                       List declared databases (name, type, collection).\n  cm64 database query <name> [flags]         Paginated read. Flags:\n      --search <x>        cross-field regex search\n      --filter <k=v>      exact-match filter (repeatable)\n      --sort <field>      sort field (default _id)\n      --order asc|desc    sort direction (default asc)\n      --page <n>          page number (default 1)\n      --limit <n>         page size (default 25, max 100)\n  cm64 database get <name> <id>              Fetch one document by _id (or top-level id).\n  cm64 database count <name> [--filter k=v]  Count documents.',
