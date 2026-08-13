@@ -3,7 +3,7 @@
 // Each command is an independent HTTP call. No sessions.
 // Usage: cm64 <command> [args] [--json]
 
-import { loadConfig, saveConfig, getToken, getEndpoint, getProjectId, getProjectName, getProjectDomain, getProjectSource, findWorkspaceFile, writeWorkspaceFile, CONFIG_FILE, WORKSPACE_FILE_NAME } from '../lib/config.js';
+import { loadConfig, saveConfig, getToken, getEndpoint, getProjectId, getProjectSource, projectMetaIsStale, resolveProjectMeta, findWorkspaceFile, writeWorkspaceFile, CONFIG_FILE, WORKSPACE_FILE_NAME } from '../lib/config.js';
 import { callCLI } from '../lib/api.js';
 import { cacheFile, getCachedFile, getCachedHash, removeCachedFile } from '../lib/cache.js';
 import { createInterface } from 'readline';
@@ -283,6 +283,20 @@ async function safeJson(res) {
     const msg = text.trim() || `HTTP ${status}`;
     return { ok: false, error: `${msg} (HTTP ${status})` };
   }
+}
+
+// ── Active-project metadata ──────────────────────────────────
+
+// Resolve the active project's name/domain, asking the server when the local
+// cache can't be trusted (i.e. CM64_PROJECT overrode the id, so any cached
+// name/domain describes a different project). Returns { name, domain }, either
+// of which may be null if the lookup fails — callers degrade to id-only output.
+async function activeProjectMeta() {
+  return resolveProjectMeta(async (projectId) => {
+    const result = await callCLI('set_project', {}, { projectId });
+    if (!result?.ok) return null;
+    return { name: result.data?.name || null, domain: result.data?.domain || null };
+  });
 }
 
 // ── Commands ─────────────────────────────────────────────────
@@ -778,16 +792,22 @@ const HANDLERS = {
     // Skip flag tokens so e.g. `cm64 push --check` isn't treated as a path.
     let target = subArgs.find(a => !a.startsWith('-'));
 
-    // Show project context prominently
-    const _pushName = getProjectName();
+    // Show project context prominently. Resolve from the server when
+    // CM64_PROJECT overrode the id — the domain also selects the source
+    // directory below, so a stale value would push from the wrong folder.
     const _pushId = getProjectId();
+    const _pushMeta = await activeProjectMeta();
+    const _pushName = _pushMeta.name;
     if (_pushName || _pushId) {
       info(`Project: ${_pushName || 'unknown'} (${_pushId || 'no id'})`);
+      if (projectMetaIsStale()) {
+        info(`(project from CM64_PROJECT — name/domain resolved from server)`);
+      }
     }
 
     // No argument: auto-detect domain folder or current dir
     if (!target) {
-      const domain = getProjectDomain();
+      const domain = _pushMeta.domain;
       if (domain && existsSync(`./${domain}`) && statSync(`./${domain}`).isDirectory()) {
         target = `./${domain}/`;
         info(`Pushing from ./${domain}/`);
@@ -1062,11 +1082,18 @@ const HANDLERS = {
 
   // ─── pull ──────────────────────────────────────────────────
   async pull() {
-    // Show project context prominently
-    const _pullName = getProjectName();
+    // Show project context prominently.
+    // Resolve name/domain from the server when CM64_PROJECT overrode the id —
+    // the cached values would otherwise name a different project, and pull
+    // uses them for the target folder AND writes them into .cm64.workspace.
     const _pullId = getProjectId();
+    const _pullMeta = await activeProjectMeta();
+    const _pullName = _pullMeta.name;
     if (_pullName || _pullId) {
       info(`Project: ${_pullName || 'unknown'} (${_pullId || 'no id'})`);
+      if (projectMetaIsStale()) {
+        info(`(project from CM64_PROJECT — name/domain resolved from server)`);
+      }
     }
 
     // Parse flags first so they can't leak into the positional target.
@@ -1086,7 +1113,7 @@ const HANDLERS = {
     if (target === './' || target === '.') {
       // Determine output directory: use domain folder if available
       let baseDir = outDir || '.';
-      const domain = getProjectDomain();
+      const domain = _pullMeta.domain;
       if (!outDir && domain) {
         // Don't nest into ./<domain>/ if we're already in that folder, or if
         // a workspace file already pins cwd to this project — would create
@@ -1229,10 +1256,13 @@ const HANDLERS = {
         const wsDir = baseDir === '.' ? '.' : baseDir;
         if (!findWorkspaceFile(wsDir)) {
           const projectId = getProjectId();
+          // Use the resolved metadata — writing getProjectName()/getProjectDomain()
+          // here is what persisted another project's name/domain alongside the
+          // correct id into .cm64.workspace.
           const wsPath = writeWorkspaceFile(wsDir, {
             project_id: projectId,
-            project_name: getProjectName(),
-            project_domain: getProjectDomain()
+            project_name: _pullMeta.name,
+            project_domain: _pullMeta.domain
           });
           info(`Pinned this directory to the project (${wsPath}).`);
         }
@@ -1316,16 +1346,22 @@ const HANDLERS = {
 
   // ─── sync ─────────────────────────────────────────────────
   async sync() {
-    // Show project context prominently
-    const _syncName = getProjectName();
+    // Show project context prominently. Resolve from the server when
+    // CM64_PROJECT overrode the id — the domain also selects the sync
+    // directory below.
     const _syncId = getProjectId();
+    const _syncMeta = await activeProjectMeta();
+    const _syncName = _syncMeta.name;
     if (_syncName || _syncId) {
       info(`Project: ${_syncName || 'unknown'} (${_syncId || 'no id'})`);
+      if (projectMetaIsStale()) {
+        info(`(project from CM64_PROJECT — name/domain resolved from server)`);
+      }
     }
 
     let target = subArgs[0];
     if (!target) {
-      const domain = getProjectDomain();
+      const domain = _syncMeta.domain;
       if (domain && existsSync(`./${domain}`) && statSync(`./${domain}`).isDirectory()) {
         target = `./${domain}/`;
         info(`Syncing ./${domain}/`);
