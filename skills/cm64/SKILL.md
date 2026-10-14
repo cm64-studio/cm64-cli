@@ -119,7 +119,7 @@ cm64 edit page/home --old '"title": "Old"' --new '"title": "New"'
 | Command | Description |
 |---------|-------------|
 | `cm64 users [--search x]` | App end-users (`--role`, `--status`, `--page`, `--limit`) |
-| `cm64 analytics [--days 7]` | Analytics (`--event`) |
+| `cm64 analytics [--days 7]` | Site traffic: views, unique visitors, live, top pages, referrers, devices, 404s, custom events (`--limit`, `--event <name>`) |
 | `cm64 debug [--pattern x]` | Logs (`--level`, `--limit`, `--since`) |
 | `cm64 database [list]` | List the project's declared databases (read-only) |
 | `cm64 database query <name>` | Read docs (`--search`, `--filter k=v`, `--sort`, `--order`, `--page`, `--limit`) |
