@@ -1029,6 +1029,10 @@ const HANDLERS = {
       baseHash = getCachedHash(projectId, serverPath);
     }
 
+    // --check / --dry-run: same preview as the directory branch — never write.
+    // (Single-file pushes used to ignore the flag and upload.)
+    const checkOnly = !!getFlag(['--check', '--dry-run']);
+
     // Ghost-resurrection check for single-file push: cached locally but
     // missing server-side means the user (or someone) deleted it on the server
     // since the last sync.
@@ -1037,6 +1041,10 @@ const HANDLERS = {
         const listed = await callCLI('list_files', {});
         if (listed.ok && Array.isArray(listed.data?.files)) {
           const stillThere = listed.data.files.some(rf => rf.class === parsed.class && rf.name === parsed.name);
+          if (!stillThere && checkOnly) {
+            outputResult({ ok: true, text: `Deleted server-side, would resurrect:\n  ! ${serverPath}\n\n--check: nothing uploaded.`, data: { new: [], modified: [], ghosts: [serverPath], unchanged: [] } });
+            return;
+          }
           if (!stillThere) {
             info(`${serverPath} was deleted on the server.`);
             const skip = jsonOutput
@@ -1050,6 +1058,20 @@ const HANDLERS = {
           }
         }
       } catch (_) { /* best-effort */ }
+    }
+
+    if (checkOnly) {
+      const cached = projectId ? getCachedFile(projectId, serverPath) : null;
+      const kind = !cached ? 'new' : (cached.content !== content ? 'modified' : 'unchanged');
+      const text = kind === 'new' ? `New:\n  + ${serverPath}`
+        : kind === 'modified' ? `Modified:\n  ~ ${serverPath}`
+        : `Unchanged — would not change anything: ${serverPath}`;
+      outputResult({
+        ok: true,
+        text: `${text}\n\n--check: nothing uploaded.`,
+        data: { new: kind === 'new' ? [serverPath] : [], modified: kind === 'modified' ? [serverPath] : [], ghosts: [], unchanged: kind === 'unchanged' ? [serverPath] : [] }
+      });
+      return;
     }
 
     const args = { path: serverPath, content };
