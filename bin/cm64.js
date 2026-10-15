@@ -1201,6 +1201,20 @@ const HANDLERS = {
             continue;
           }
 
+          // A push caches the Mac's clock (write_file returns no updatedAt), so a clock
+          // behind the server's makes every just-pushed file look changed remotely.
+          // When the dates say "changed", confirm with the content hash and, if it
+          // matches, adopt the server's date so the next check doesn't ask again.
+          if (remoteChangedSinceCache && cached?.hash) {
+            try {
+              const remote = await callCLI('diff', { path: serverPath });
+              if (remote.ok !== false && remote.data?.hash === cached.hash) {
+                remoteChangedSinceCache = false;
+                cacheFile(projectId, serverPath, { ...cached, updatedAt: f.updatedAt });
+              }
+            } catch (_) { /* keep the date-based answer */ }
+          }
+
           if (remoteChangedSinceCache && localDiffersFromCache) {
             wouldClobber.push(serverPath);
           } else if (remoteChangedSinceCache) {
