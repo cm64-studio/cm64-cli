@@ -2007,20 +2007,39 @@ const HANDLERS = {
     const folder = getFlag(['--folder', '--dir'], true);
     const mimeType = getFlag(['--mime', '--type'], true);
 
+    const isPrivate = getFlag('--private');
+
     if (!localFile) die('File path required: cm64 upload hero.jpg -f ./hero.jpg');
     if (!existsSync(localFile)) die(`File not found: ${localFile}`);
 
     const buffer = readFileSync(localFile);
-    const data = buffer.toString('base64');
-
     const sizeMB = (buffer.length / 1024 / 1024).toFixed(1);
-    info(`Uploading ${name} (${sizeMB}MB)...`);
+    info(`Uploading ${name} (${sizeMB}MB)${isPrivate ? ' [private]' : ''}...`);
 
-    const args = { name, data };
-    if (folder) args.folder = folder;
-    if (mimeType) args.mime_type = mimeType;
+    const base = { name };
+    if (folder) base.folder = folder;
+    if (mimeType) base.mime_type = mimeType;
+    if (isPrivate) base.private = true;
 
-    const result = await callCLI('upload_asset', args);
+    // Signed upload: the file goes straight to S3, so size is not capped by the
+    // API (10 MB) or by Cloudflare (100 MB per request).
+    let result;
+    const init = await callCLI('upload_asset_init', { ...base, size: buffer.length });
+    if (init.ok) {
+      const put = await fetch(init.data.upload_url, {
+        method: 'PUT',
+        headers: init.data.headers || {},
+        body: buffer
+      }).catch(e => ({ ok: false, status: 0, statusText: e.message }));
+      if (!put.ok) die(`Upload to storage failed: ${put.status} ${put.statusText}`);
+      result = await callCLI('upload_asset_complete', base);
+    } else if (/Unknown command/.test(init.error || '')) {
+      // Older server without signed uploads
+      if (isPrivate) die('This server does not support private uploads yet.');
+      result = await callCLI('upload_asset', { ...base, data: buffer.toString('base64') });
+    } else {
+      result = init;
+    }
 
     if (result.ok && !jsonOutput) {
       out(result.data?.url || result.text);
@@ -2102,6 +2121,7 @@ CONTEXT
 ASSETS
   cm64 upload <name> -f <file>    Upload asset to S3 (images, videos, etc.)
   cm64 upload logo.png -f ./logo.png --folder images
+  cm64 upload fw.bin -f ./fw.bin --private   Private: no public URL; sites use app.storage.signedUrl()
   cm64 assets [--folder x]        List assets with S3 URLs
 
 DEPLOY
@@ -2248,7 +2268,7 @@ const SUBCOMMAND_HELP = {
   deploy:     'Usage: cm64 deploy <snapshot_id|latest> [--domain <d>]\n  Pin a snapshot to production.',
   history:    'Usage: cm64 history <class/name>\n  Show version history for a file.',
   restore:    'Usage: cm64 restore <class/name> --version <id>\n  Restore a file to a previous version.',
-  upload:     'Usage: cm64 upload <name> -f <file> [--folder <path>] [--mime <type>]\n  Upload an asset (image, video, etc.).',
+  upload:     'Usage: cm64 upload <name> -f <file> [--folder <path>] [--mime <type>] [--private]\n  Upload an asset (image, video, etc.). Up to 2 GB.\n  --private: stored in a non-public bucket; a site function hands out a temporary link with app.storage.signedUrl("<folder>/<name>").',
   assets:     'Usage: cm64 assets [--folder <path>]\n  List uploaded assets with S3 URLs.',
   buildme:    'Usage: cm64 buildme [--set "content"] [--append]\n  Read or update BUILDME.md.',
   load:       'Usage: cm64 load [--raw]\n  Prints the project system prompt + the available-skills index (full context bootstrap).',
