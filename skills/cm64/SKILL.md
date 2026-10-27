@@ -96,7 +96,8 @@ cm64 edit page/home --old '"title": "Old"' --new '"title": "New"'
 ### Assets
 | Command | Description |
 |---------|-------------|
-| `cm64 upload <name> -f <file>` | Upload asset (`--folder`, `--mime`) |
+| `cm64 upload <name> -f <file>` | Upload asset up to 2 GB (`--folder`, `--mime`) |
+| `cm64 upload <name> -f <file> --private` | Private asset: no URL; serve it from a function with `app.storage.signedUrl('<folder>/<name>')` |
 | `cm64 assets [--folder x]` | List assets with URLs |
 
 ### Deploy

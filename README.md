@@ -72,7 +72,8 @@ See [SKILL.md](./SKILL.md) for comprehensive AI model documentation.
 - `cm64 buildme` — Read/update BUILDME.md
 
 ### Assets
-- `cm64 upload <name> -f <file>` — Upload to S3
+- `cm64 upload <name> -f <file>` — Upload to S3, up to 2 GB (`--folder`, `--mime`)
+- `cm64 upload <name> -f <file> --private` — Private file (firmware, installer): no public URL; a site function hands out a temporary link with `app.storage.signedUrl('<folder>/<name>')`
 - `cm64 assets` — List assets
 
 ### Deploy
