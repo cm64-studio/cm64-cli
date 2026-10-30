@@ -1936,6 +1936,23 @@ const HANDLERS = {
     outputResult(result);
   },
 
+  // ─── payments ──────────────────────────────────────────────
+  // The project's one-time checkouts (app.billing.checkout in a function) and how each ended.
+  async payments() {
+    const limit = getFlag(['--limit', '-l'], true);
+    const status = getFlag(['--status', '-s'], true);
+    const days = getFlag(['--days', '-d'], true);
+    const test = getFlag(['--test']);
+
+    const result = await callCLI('payments', {
+      limit: limit ? parseInt(limit) : undefined,
+      status,
+      days: days ? parseInt(days) : undefined,
+      test: test || undefined
+    });
+    outputResult(result);
+  },
+
   // ─── database ──────────────────────────────────────────────
   // Read-only access to the ACTIVE project's own databases. The server
   // resolves the database name against this project's config and applies
@@ -2136,6 +2153,7 @@ DATA
   cm64 user set <email> --role r  Change a user's role/name/status
   cm64 user rm <email>            Remove an app user
   cm64 analytics [--days 7]       Site traffic: views, visitors, top pages, referrers
+  cm64 payments [--status x]      One-time payments from functions: status, amount, handler errors
   cm64 debug [--pattern x]        Server-side function logs
   cm64 database                   List this project's databases (read-only)
   cm64 database query <name>      Read docs (--search, --filter k=v, --page, --limit)
@@ -2276,6 +2294,7 @@ const SUBCOMMAND_HELP = {
   learn:      'Usage: cm64 learn [<skill> ...] [--offset <n>] [--limit <n>]\n  No args: lists the available skills (what you can learn). For the system prompt too, use `cm64 load`.\n  With skill names: prints those skills\' contents (use --offset/--limit to chunk long ones).',
   users:      'Usage: cm64 users [--search <x>] [--role <r>] [--status <s>] [--page <n>] [--limit <n>]\n  List app end-users.',
   user:       'Usage: cm64 user <add|set|rm|list> ...\n  Manage app end-users of the active project (create + assign role privileges).\n  Login is OTP-based, so no password is set — new users sign in via one-time code.\n\n  cm64 user add <email> [--name "..."] [--role <r>] [--status active]\n      Create a user. --role is repeatable for multiple roles (--role admin --role editor).\n      Default role is "user", default status "active".\n  cm64 user set <email> [--role <r>] [--name "..."] [--status active|inactive]\n      Update an existing user (only the flags you pass change).\n      Changing --role rewrites the roles[] array (the field that gates access).\n  cm64 user rm <email>                       Delete a user.\n  cm64 user list [--search <x>] [--role <r>]  Alias for `cm64 users`.\n\n  Roles are free-form; common values are admin / user / editor.',
+  payments:   'Usage: cm64 payments [--limit <n>] [--status <s>] [--days <n>] [--test]\n  One-time checkouts created by the project\'s functions (app.billing.checkout), newest first:\n  status (open · succeeded · failed · expired · refunded), amount, provider, buyer, the function\n  and reference, and whether the handler took the payment (⚠ = it failed and the provider is\n  retrying). --test includes test-mode checkouts. See: cm64 learn payments',
   analytics:  'Usage: cm64 analytics [--days <n>] [--limit <n>] [--event <e>]\n  Site traffic for the active project (default last 30 days, UTC): page views, unique\n  visitors, live visitors (5 min), daily trend, top pages, referrers, devices/browsers/OS,\n  not-found hits and custom events. --limit caps the top lists (default 10).\n  --event <name> drills into one event type (e.g. a custom app.analytics.track() event).',
   debug:      'Usage: cm64 debug [--pattern <p>] [--level <l>] [--function <name>] [--source function|component] [--limit <n>] [--since <date>]\n  View server-side function execution logs (app.log, errors, recommendations).',
   database:   'Usage: cm64 database <list|query|get|count>\n  Read-only access to the ACTIVE project\'s own databases. Isolation is enforced server-side: a database name resolves against this project\'s config only, and local (jason) collections are tenant-prefixed — there is no way to reach another project\'s data.\n\n  cm64 database [list]                       List declared databases (name, type, collection).\n  cm64 database query <name> [flags]         Paginated read. Flags:\n      --search <x>        cross-field regex search\n      --filter <k=v>      exact-match filter (repeatable)\n      --sort <field>      sort field (default _id)\n      --order asc|desc    sort direction (default asc)\n      --page <n>          page number (default 1)\n      --limit <n>         page size (default 25, max 100)\n  cm64 database get <name> <id>              Fetch one document by _id (or top-level id).\n  cm64 database count <name> [--filter k=v]  Count documents.',

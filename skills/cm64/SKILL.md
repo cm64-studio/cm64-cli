@@ -121,6 +121,7 @@ cm64 edit page/home --old '"title": "Old"' --new '"title": "New"'
 |---------|-------------|
 | `cm64 users [--search x]` | App end-users (`--role`, `--status`, `--page`, `--limit`) |
 | `cm64 analytics [--days 7]` | Site traffic: views, unique visitors, live, top pages, referrers, devices, 404s, custom events (`--limit`, `--event <name>`) |
+| `cm64 payments [--status s]` | One-time payments from functions (`app.billing.checkout`): status, amount, handler failures (`--days`, `--limit`, `--test`). How to sell: `cm64 learn payments` |
 | `cm64 debug [--pattern x]` | Logs (`--level`, `--limit`, `--since`) |
 | `cm64 database [list]` | List the project's declared databases (read-only) |
 | `cm64 database query <name>` | Read docs (`--search`, `--filter k=v`, `--sort`, `--order`, `--page`, `--limit`) |
